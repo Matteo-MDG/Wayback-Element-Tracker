@@ -87,21 +87,6 @@ def get_extractable_attrs(element) -> list:
     return found
 
 def extract_value(element, extract: str) -> str:
-    if not element:
-        return ""
-    
-    # New logic: Check if we are targeting the Roblox data script
-    if element.name == "script" and element.get("id") == "rbx-attribute-store":
-        try:
-            # Locate the visits count in the data-warnings or the script text
-            data_text = element.get_text()
-            # Use regex to find the visits value in the JSON blob
-            match = re.search(r'"visits":\s*(\d+)', data_text)
-            if match:
-                return match.group(1)
-        except Exception:
-            pass
-
     if extract == "text":
         return element.get_text(separator=" ", strip=True)
     val = element.get(extract)
@@ -662,7 +647,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.0.1")
+    log("  Wayback Element Tracker v1.0.2")
     log("=" * 60)
     log(f"  URL        : {cfg['url']}")
     for elem in cfg["elements"]:
