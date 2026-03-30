@@ -36,7 +36,7 @@ show_seconds = no
 
 # --- OUTPUT ----------------------------------------------------------------------------------------------
 output = wayback_results.csv
-csv_layout = columns
+csv_layout = rows
 show_month = yes
 show_day = yes
 show_year = yes

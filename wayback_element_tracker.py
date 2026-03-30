@@ -252,7 +252,7 @@ def load_settings(path="settings.txt") -> dict:
     if not os.path.exists(path):
         sys.exit(f"[Error] settings.txt not found at: {os.path.abspath(path)}")
 
-    defaults = {
+    raw = {
         "url":           "",
         "from_date":     "",
         "to_date":       "",
@@ -276,11 +276,9 @@ def load_settings(path="settings.txt") -> dict:
         "retries":       "5",
         "end_passes":    "2",
         "threads":       "3",
+        **{f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)},
+        **{f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)},
     }
-    defaults.update({f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)})
-    defaults.update({f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)})
-
-    raw = dict(defaults)
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -613,7 +611,7 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
             for label, fn in descriptors:
                 writer.writerow([label] + [fn(r)[0] for r in results])
 
-    log(f"\n[CSV]    Saved {len(results)} snapshots ({layout} layout) -> {os.path.abspath(output_path)}")
+    log(f"\n[CSV]    Saved {len(results)} snapshots -> {os.path.abspath(output_path)}")
 
 
 # ── Run One Pass Over Snapshot Indices ────────────────────────────────────────
@@ -664,7 +662,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.0.0")
+    log("  Wayback Element Tracker v1.0.1")
     log("=" * 60)
     log(f"  URL        : {cfg['url']}")
     for elem in cfg["elements"]:
@@ -673,6 +671,7 @@ def main():
     log(f"  Frequency  : {cfg['frequency']}  |  anchor: {cfg['sample_anchor']}  |  min gap: {gap_info}")
     log(f"  Format     : {sample_str}")
     log(f"  Threads    : {cfg['threads']}")
+    log(f"  CSV layout : {cfg['csv_layout']}")
     log(f"  Output     : {cfg['output']}")
     log("=" * 60)
 
