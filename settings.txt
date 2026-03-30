@@ -1,0 +1,50 @@
+# --- URL -------------------------------------------------------------------------------------------------
+url = 
+
+# --- HTML ELEMENTS ---------------------------------------------------------------------------------------
+element_1 = 
+extract_1 = 
+
+element_2 = 
+extract_2 = 
+
+element_3 = 
+extract_3 = 
+
+element_4 = 
+extract_4 = 
+
+element_5 = 
+extract_5 = 
+
+# --- DATE RANGE ------------------------------------------------------------------------------------------
+from_date = 
+to_date = 
+
+# --- SNAPSHOT FREQUENCY ----------------------------------------------------------------------------------
+frequency = monthly
+sample_anchor = start
+
+# --- DATE & TIME FORMAT ----------------------------------------------------------------------------------
+convention = us
+date_style = long
+year_digits = 4
+date_padding = no
+time_format = 12h
+time_padding = yes
+show_seconds = no
+
+# --- OUTPUT ----------------------------------------------------------------------------------------------
+output = wayback_results.csv
+csv_layout = columns
+show_month = yes
+show_day = yes
+show_year = yes
+show_time = yes
+
+# --- ADVANCED --------------------------------------------------------------------------------------------
+min_gap = 0.5
+delay = 10
+retries = 5
+end_passes = 2
+threads = 3
