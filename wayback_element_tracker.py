@@ -11,25 +11,25 @@ import requests
 from bs4 import BeautifulSoup
 
 # ── Constants ────────────────────────────────────────────────────────────────
-CDX_API      = "https://web.archive.org/cdx/search/cdx"
+CDX_API = "https://web.archive.org/cdx/search/cdx"
 WAYBACK_BASE = "https://web.archive.org/web"
 
 FREQ_MAP = {
-    "all":     None,
-    "hourly":  "%Y%m%d%H",
-    "daily":   "%Y%m%d",
-    "weekly":  "%Y%W",
+    "all": None,
+    "hourly": "%Y%m%d%H",
+    "daily": "%Y%m%d",
+    "weekly": "%Y%W",
     "monthly": "%Y%m",
-    "yearly":  "%Y",
+    "yearly": "%Y",
 }
 
 FREQ_SECONDS = {
-    "all":     0,
-    "hourly":  3600,
-    "daily":   86400,
-    "weekly":  604800,
+    "all": 0,
+    "hourly": 3600,
+    "daily": 86400,
+    "weekly": 604800,
     "monthly": 2592000,
-    "yearly":  31536000,
+    "yearly": 31536000,
 }
 
 KNOWN_ATTRS = [
@@ -40,16 +40,18 @@ KNOWN_ATTRS = [
 MAX_ELEMENTS = 5
 
 # ── Logging & Sequential Print Buffer ────────────────────────────────────────
-_log_lines     = []
-_print_lock    = threading.Lock()
-_print_buffer  = {}     # index -> message string
-_next_to_print = [1]    # list so threads share the same mutable object
+_log_lines = []
+_print_lock = threading.Lock()
+_print_buffer = {}  # index -> message string
+_next_to_print = [1]  # list so threads share the same mutable object
 
-def log(msg: str = ""):
+
+def log(msg: str=""):
     """Print immediately and record in log."""
     with _print_lock:
         print(msg)
         _log_lines.append(msg)
+
 
 def buffer_and_flush(index: int, msg: str):
     """
@@ -63,6 +65,7 @@ def buffer_and_flush(index: int, msg: str):
             print(m)
             _log_lines.append(m)
             _next_to_print[0] += 1
+
 
 def save_log(output_path: str):
     log_path = os.path.splitext(output_path)[0] + ".log"
@@ -86,6 +89,7 @@ def get_extractable_attrs(element) -> list:
             found.append(attr)
     return found
 
+
 def extract_value(element, extract: str) -> str:
     if extract == "text":
         return element.get_text(separator=" ", strip=True)
@@ -93,6 +97,7 @@ def extract_value(element, extract: str) -> str:
     if val is None:
         return ""
     return " ".join(val).strip() if isinstance(val, list) else str(val).strip()
+
 
 # ── HTML Element Parser ───────────────────────────────────────────────────────
 def parse_element_html(raw: str, slot: int) -> tuple:
@@ -116,8 +121,8 @@ def parse_element_html(raw: str, slot: int) -> tuple:
             f"        element_{slot} = <p class=\"rbx-lead\" title=\"28,760,666\">28M+</p>"
         )
 
-    elem_id      = element.get("id", "").strip()
-    classes      = element.get("class", [])
+    elem_id = element.get("id", "").strip()
+    classes = element.get("class", [])
     extractables = get_extractable_attrs(element)
 
     # Selector strategy: always build tag.class1.class2#id using whatever
@@ -139,55 +144,55 @@ def parse_element_html(raw: str, slot: int) -> tuple:
 # ── Date / Time Formatting ────────────────────────────────────────────────────
 def format_date(dt: datetime, cfg: dict) -> str:
     show_month = cfg["show_month"]
-    show_day   = cfg["show_day"]
-    show_year  = cfg["show_year"]
+    show_day = cfg["show_day"]
+    show_year = cfg["show_year"]
     convention = cfg["convention"]
-    style      = cfg["date_style"]
-    pad        = cfg["date_padding"]
-    year_dig   = cfg["year_digits"]
+    style = cfg["date_style"]
+    pad = cfg["date_padding"]
+    year_dig = cfg["year_digits"]
 
-    day_str    = f"{dt.day:02d}" if pad else str(dt.day)
-    month_str  = f"{dt.month:02d}" if pad else str(dt.month)
+    day_str = f"{dt.day:02d}" if pad else str(dt.day)
+    month_str = f"{dt.month:02d}" if pad else str(dt.month)
     month_long = dt.strftime("%B")
     month_abbr = dt.strftime("%b")
-    year       = dt.strftime("%Y") if year_dig == 4 else dt.strftime("%y")
+    year = dt.strftime("%Y") if year_dig == 4 else dt.strftime("%y")
 
     if style in ("long", "short"):
         month_word = month_long if style == "long" else month_abbr
         if convention == "us":
             parts = []
             if show_month: parts.append(month_word)
-            if show_day:   parts.append(str(dt.day) + ",")
-            if show_year:  parts.append(year)
+            if show_day: parts.append(str(dt.day) + ",")
+            if show_year: parts.append(year)
             return " ".join(parts).rstrip(",").strip()
         else:
             parts = []
-            if show_day:   parts.append(str(dt.day))
+            if show_day: parts.append(str(dt.day))
             if show_month: parts.append(month_word)
-            if show_year:  parts.append(year)
+            if show_year: parts.append(year)
             return " ".join(parts).strip()
     else:
         if convention == "us":
             components = []
             if show_month: components.append(month_str)
-            if show_day:   components.append(day_str)
-            if show_year:  components.append(year)
+            if show_day: components.append(day_str)
+            if show_year: components.append(year)
         else:
             components = []
-            if show_day:   components.append(day_str)
+            if show_day: components.append(day_str)
             if show_month: components.append(month_str)
-            if show_year:  components.append(year)
+            if show_year: components.append(year)
         return "/".join(components)
 
 
 def format_time(dt: datetime, cfg: dict) -> str:
-    fmt      = cfg["time_format"]
-    seconds  = cfg["show_seconds"]
+    fmt = cfg["time_format"]
+    seconds = cfg["show_seconds"]
     time_pad = cfg["time_padding"]
-    minute   = dt.strftime("%M")
-    second   = dt.strftime("%S")
+    minute = dt.strftime("%M")
+    second = dt.strftime("%S")
     if fmt == "12h":
-        hour   = dt.strftime("%I").lstrip("0") or "12"
+        hour = dt.strftime("%I").lstrip("0") or "12"
         period = dt.strftime("%p")
         return f"{hour}:{minute}:{second} {period}" if seconds else f"{hour}:{minute} {period}"
     else:
@@ -233,34 +238,35 @@ def anchor_dt_for(dt: datetime, frequency: str, anchor: str) -> datetime:
 def yesno(val: str) -> bool:
     return val.strip().lower() == "yes"
 
+
 def load_settings(path="settings.txt") -> dict:
     if not os.path.exists(path):
         sys.exit(f"[Error] settings.txt not found at: {os.path.abspath(path)}")
 
     raw = {
-        "url":           "",
-        "from_date":     "",
-        "to_date":       "",
-        "frequency":     "monthly",
+        "url": "",
+        "from_date": "",
+        "to_date": "",
+        "frequency": "monthly",
         "sample_anchor": "start",
-        "convention":    "us",
-        "date_style":    "long",
-        "year_digits":   "4",
-        "date_padding":  "no",
-        "time_format":   "12h",
-        "time_padding":  "yes",
-        "show_seconds":  "no",
-        "output":        "wayback_results.csv",
-        "show_month":    "yes",
-        "show_day":      "yes",
-        "show_year":     "yes",
-        "show_time":     "yes",
-        "csv_layout":    "rows",
-        "min_gap":       "0.5",
-        "delay":         "10",
-        "retries":       "5",
-        "end_passes":    "2",
-        "threads":       "3",
+        "convention": "us",
+        "date_style": "long",
+        "year_digits": "4",
+        "date_padding": "no",
+        "time_format": "12h",
+        "time_padding": "yes",
+        "show_seconds": "no",
+        "output": "wayback_results.csv",
+        "show_month": "yes",
+        "show_day": "yes",
+        "show_year": "yes",
+        "show_time": "yes",
+        "csv_layout": "rows",
+        "min_gap": "0.5",
+        "delay": "10",
+        "retries": "5",
+        "end_passes": "2",
+        "threads": "3",
         **{f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)},
         **{f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)},
     }
@@ -272,7 +278,7 @@ def load_settings(path="settings.txt") -> dict:
             if "=" not in line:
                 continue
             key, _, value = line.partition("=")
-            key   = key.strip().lower().replace("-", "_")
+            key = key.strip().lower().replace("-", "_")
             value = value.strip()
             if key in raw and value:
                 raw[key] = value
@@ -332,42 +338,42 @@ def load_settings(path="settings.txt") -> dict:
         sys.exit("[Error] 'threads' must be a positive integer.")
 
     return {
-        "url":           raw["url"],
-        "elements":      elements,
-        "from_date":     raw["from_date"],
-        "to_date":       raw["to_date"],
-        "frequency":     raw["frequency"],
+        "url": raw["url"],
+        "elements": elements,
+        "from_date": raw["from_date"],
+        "to_date": raw["to_date"],
+        "frequency": raw["frequency"],
         "sample_anchor": raw["sample_anchor"].lower(),
-        "convention":    raw["convention"].lower(),
-        "date_style":    raw["date_style"].lower(),
-        "year_digits":   int(raw["year_digits"]),
-        "date_padding":  yesno(raw["date_padding"]),
-        "time_format":   raw["time_format"].lower(),
-        "time_padding":  yesno(raw["time_padding"]),
-        "show_seconds":  yesno(raw["show_seconds"]),
-        "show_month":    yesno(raw["show_month"]),
-        "show_day":      yesno(raw["show_day"]),
-        "show_year":     yesno(raw["show_year"]),
-        "show_time":     yesno(raw["show_time"]),
-        "csv_layout":    raw["csv_layout"].lower(),
-        "min_gap_secs":  min_gap_secs,
-        "min_gap_frac":  float(raw["min_gap"]),
-        "output":        raw["output"],
-        "delay":         float(raw["delay"]),
-        "retries":       int(raw["retries"]),
-        "end_passes":    int(raw["end_passes"]),
-        "threads":       threads,
+        "convention": raw["convention"].lower(),
+        "date_style": raw["date_style"].lower(),
+        "year_digits": int(raw["year_digits"]),
+        "date_padding": yesno(raw["date_padding"]),
+        "time_format": raw["time_format"].lower(),
+        "time_padding": yesno(raw["time_padding"]),
+        "show_seconds": yesno(raw["show_seconds"]),
+        "show_month": yesno(raw["show_month"]),
+        "show_day": yesno(raw["show_day"]),
+        "show_year": yesno(raw["show_year"]),
+        "show_time": yesno(raw["show_time"]),
+        "csv_layout": raw["csv_layout"].lower(),
+        "min_gap_secs": min_gap_secs,
+        "min_gap_frac": float(raw["min_gap"]),
+        "output": raw["output"],
+        "delay": float(raw["delay"]),
+        "retries": int(raw["retries"]),
+        "end_passes": int(raw["end_passes"]),
+        "threads": threads,
     }
 
 
 # ── Step 1: Get Snapshot List ─────────────────────────────────────────────────
 def get_snapshots(cfg: dict) -> list:
     params = {
-        "url":      cfg["url"],
-        "output":   "json",
-        "fl":       "timestamp,original",
+        "url": cfg["url"],
+        "output": "json",
+        "fl": "timestamp,original",
         "collapse": "digest",
-        "filter":   "statuscode:200",
+        "filter": "statuscode:200",
     }
     if cfg["from_date"]:
         params["from"] = cfg["from_date"]
@@ -397,17 +403,17 @@ def get_snapshots(cfg: dict) -> list:
 
 # ── Step 2: Sampling ──────────────────────────────────────────────────────────
 def sample_snapshots(snapshots: list, cfg: dict) -> list:
-    frequency    = cfg["frequency"]
-    anchor       = cfg["sample_anchor"]
+    frequency = cfg["frequency"]
+    anchor = cfg["sample_anchor"]
     min_gap_secs = cfg["min_gap_secs"]
-    freq_fmt     = FREQ_MAP.get(frequency)
+    freq_fmt = FREQ_MAP.get(frequency)
 
     if freq_fmt is None:
         if min_gap_secs == 0:
             return snapshots
         kept = [snapshots[0]]
         for snap in snapshots[1:]:
-            if abs((ts_to_dt(snap["timestamp"]) -
+            if abs((ts_to_dt(snap["timestamp"]) - 
                     ts_to_dt(kept[-1]["timestamp"])).total_seconds()) >= min_gap_secs:
                 kept.append(snap)
         return kept
@@ -419,10 +425,10 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
 
     sampled = []
     for bucket in sorted(buckets):
-        group  = buckets[bucket]
+        group = buckets[bucket]
         ref_dt = ts_to_dt(group[0]["timestamp"])
         target = anchor_dt_for(ref_dt, frequency, anchor)
-        best   = min(group, key=lambda s: abs(
+        best = min(group, key=lambda s: abs(
             (ts_to_dt(s["timestamp"]) - target).total_seconds()
         ))
         sampled.append(best)
@@ -435,7 +441,7 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
         for snap in sampled[1:]:
             prev_dt = ts_to_dt(kept[-1]["timestamp"])
             curr_dt = ts_to_dt(snap["timestamp"])
-            gap     = abs((curr_dt - prev_dt).total_seconds())
+            gap = abs((curr_dt - prev_dt).total_seconds())
             if gap >= min_gap_secs:
                 kept.append(snap)
             else:
@@ -449,9 +455,9 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
                     discarded_dates.append(snap["timestamp"])
         if discarded_dates:
             # Format min_gap_secs as human-readable
-            gap_mins  = min_gap_secs // 60
+            gap_mins = min_gap_secs // 60
             gap_hours = gap_mins // 60
-            gap_days  = gap_hours // 24
+            gap_days = gap_hours // 24
             if gap_days >= 1:
                 gap_str = f"{gap_days}d {gap_hours % 24}h" if gap_hours % 24 else f"{gap_days}d"
             elif gap_hours >= 1:
@@ -475,7 +481,7 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
     prefix = f"[{index}/{total}] {date_str} {time_str}".strip()
 
     max_sel_len = max(len(e["selector"]) for e in cfg["elements"])
-    last_err    = ""
+    last_err = ""
 
     for attempt in range(1, cfg["retries"] + 1):
         try:
@@ -485,15 +491,15 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
             )
             resp.raise_for_status()
 
-            soup        = BeautifulSoup(resp.text, "lxml")
+            soup = BeautifulSoup(resp.text, "lxml")
             elem_values = {}
-            lines       = [prefix]
+            lines = [prefix]
 
             for elem in cfg["elements"]:
-                sel     = elem["selector"]
+                sel = elem["selector"]
                 extract = elem["extract"]
                 matches = soup.select(sel)
-                label   = f"  {sel:<{max_sel_len}}"
+                label = f"  {sel:<{max_sel_len}}"
                 if not matches:
                     elem_values[elem["slot"]] = []
                     lines.append(f"{label}: (no element)")
@@ -508,11 +514,11 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
 
             buffer_and_flush(index, "\n".join(lines))
             return {
-                "date":        date_str,
-                "time":        time_str,
+                "date": date_str,
+                "time": time_str,
                 "elem_values": elem_values,
-                "url":         wayback_url,
-                "error":       "",
+                "url": wayback_url,
+                "error": "",
             }
 
         except requests.exceptions.Timeout:
@@ -533,11 +539,11 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
 
     buffer_and_flush(index, f"{prefix} ... failed ({last_err})")
     return {
-        "date":        date_str,
-        "time":        time_str,
+        "date": date_str,
+        "time": time_str,
         "elem_values": {elem["slot"]: [] for elem in cfg["elements"]},
-        "url":         wayback_url,
-        "error":       last_err,
+        "url": wayback_url,
+        "error": last_err,
     }
 
 
@@ -548,8 +554,8 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
         return
 
     show_time = cfg["show_time"]
-    elements  = cfg["elements"]
-    layout    = cfg["csv_layout"]
+    elements = cfg["elements"]
+    layout = cfg["csv_layout"]
 
     # Each descriptor: (label, fn(result) -> list of values)
     # Console shows them comma-separated; CSV expands into separate columns/rows.
@@ -569,21 +575,25 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
         max_per_slot[slot] = max(max_per_slot[slot], 1)
 
     for elem in elements:
-        slot  = elem["slot"]
-        sel   = elem["selector"]
+        slot = elem["slot"]
+        sel = elem["selector"]
         count = max_per_slot[slot]
         if count == 1:
+
             def make_fn(s):
                 return lambda r: r["elem_values"].get(s, [""])[:1] or [""]
+
             descriptors.append((sel, make_fn(slot)))
         else:
             for i in range(count):
                 label = f"{sel} [{i+1}]"
+
                 def make_fn(s, idx):
                     return lambda r: [(r["elem_values"].get(s, []) + [""] * (idx + 1))[idx]]
+
                 descriptors.append((label, make_fn(slot, i)))
 
-    descriptors.append(("url",   lambda r, _=None: [r["url"]]))
+    descriptors.append(("url", lambda r, _=None: [r["url"]]))
     descriptors.append(("error", lambda r, _=None: [r["error"]]))
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
@@ -609,23 +619,23 @@ def run_pass(indices: list, snapshots: list, results: list,
             with ThreadPoolExecutor(max_workers=cfg["threads"]) as executor:
                 for i in indices:
                     snap = snapshots[i]
-                    fut  = executor.submit(
+                    fut = executor.submit(
                         fetch_snapshot, session,
                         i + 1, total,
                         snap["timestamp"], snap["original"], cfg,
                     )
                     futures[fut] = i
                 for fut in as_completed(futures):
-                    i          = futures[fut]
-                    result     = fut.result()
+                    i = futures[fut]
+                    result = fut.result()
                     results[i] = result
                     if result["error"]:
                         failed.append(i)
             failed.sort()
         else:
             for i in indices:
-                snap       = snapshots[i]
-                result     = fetch_snapshot(
+                snap = snapshots[i]
+                result = fetch_snapshot(
                     session, i + 1, total,
                     snap["timestamp"], snap["original"], cfg,
                 )
@@ -638,12 +648,12 @@ def run_pass(indices: list, snapshots: list, results: list,
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     start_time = time.time()
-    cfg        = load_settings("settings.txt")
+    cfg = load_settings("settings.txt")
 
-    sample_dt             = datetime(2023, 11, 5, 14, 30, 22)
+    sample_dt = datetime(2023, 11, 5, 14, 30, 22)
     sample_date, sample_time = format_datetime(sample_dt, cfg)
-    sample_str            = " | ".join(p for p in [sample_date, sample_time] if p)
-    gap_info              = (f"{cfg['min_gap_frac']} × period"
+    sample_str = " | ".join(p for p in [sample_date, sample_time] if p)
+    gap_info = (f"{cfg['min_gap_frac']} × period"
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
@@ -665,8 +675,8 @@ def main():
         sys.exit("No snapshots to process.")
 
     snapshots = sample_snapshots(snapshots, cfg)
-    total     = len(snapshots)
-    results   = [None] * total
+    total = len(snapshots)
+    results = [None] * total
 
     failed_indices = run_pass(list(range(total)), snapshots, results, total, cfg)
 
@@ -680,7 +690,7 @@ def main():
     write_csv(results, cfg, cfg["output"])
     save_log(cfg["output"])
 
-    elapsed    = time.time() - start_time
+    elapsed = time.time() - start_time
     mins, secs = divmod(int(elapsed), 60)
     log(f"[Done]   Finished in {mins}m {secs}s")
 
