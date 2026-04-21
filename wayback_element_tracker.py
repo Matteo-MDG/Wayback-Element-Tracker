@@ -745,7 +745,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.0.2")
+    log("  Wayback Element Tracker v1.1.0")
     log("=" * 60)
     log(f"  URL        : {cfg['url']}{' (+ variants)' if cfg['url_variants'] else ''}")
     for elem in cfg["elements"]:
