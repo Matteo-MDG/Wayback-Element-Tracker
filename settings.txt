@@ -1,10 +1,10 @@
 # --- URL -------------------------------------------------------------------------------------------------
-url = 
-url_variants = no
+url = https://royaleapi.com/card/fireball
+url_variants = yes
 
 # --- HTML ELEMENTS ---------------------------------------------------------------------------------------
-element_1 = 
-extract_1 = 
+element_1 = <div class="ui basic label" style="margin-top:0 !important;">Usage: 21%
+extract_1 = text
 
 element_2 = 
 extract_2 = 
@@ -23,7 +23,7 @@ from_date =
 to_date = 
 
 # --- SNAPSHOT FREQUENCY ----------------------------------------------------------------------------------
-frequency = monthly
+frequency = daily
 sample_anchor = start
 
 # --- DATE & TIME FORMAT ----------------------------------------------------------------------------------
@@ -38,7 +38,7 @@ show_seconds = no
 # --- OUTPUT ----------------------------------------------------------------------------------------------
 output = wayback_results.csv
 csv_layout = rows
-result_padding = no
+result_padding = yes
 show_month = yes
 show_day = yes
 show_year = yes
@@ -49,4 +49,4 @@ min_gap = 0.5
 delay = 10
 retries = 5
 end_passes = 2
-threads = 3
+threads = 5

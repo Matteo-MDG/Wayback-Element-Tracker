@@ -449,6 +449,13 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
     anchor = cfg["sample_anchor"]
     min_gap_secs = cfg["min_gap_secs"]
     freq_fmt = FREQ_MAP.get(frequency)
+    base_url = cfg["url"]
+
+    def snap_sort_key(s, target):
+        """Sort key: canonical URL first (0), then time distance to target."""
+        is_variant = 0 if s["original"] == base_url else 1
+        time_dist = abs((ts_to_dt(s["timestamp"]) - target).total_seconds())
+        return (is_variant, time_dist)
 
     if freq_fmt is None:
         if min_gap_secs == 0:
@@ -470,9 +477,7 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
         group = buckets[bucket]
         ref_dt = ts_to_dt(group[0]["timestamp"])
         target = anchor_dt_for(ref_dt, frequency, anchor)
-        best = min(group, key=lambda s: abs(
-            (ts_to_dt(s["timestamp"]) - target).total_seconds()
-        ))
+        best = min(group, key=lambda s: snap_sort_key(s, target))
         sampled.append(best)
 
     log(f"[Sample] '{frequency}' ({anchor}) -> {len(sampled)} snapshots selected.")
@@ -489,8 +494,13 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
             else:
                 prev_anchor = anchor_dt_for(prev_dt, frequency, anchor)
                 curr_anchor = anchor_dt_for(curr_dt, frequency, anchor)
-                if abs((curr_dt - curr_anchor).total_seconds()) < \
-                   abs((prev_dt - prev_anchor).total_seconds()):
+                prev_is_variant = kept[-1]["original"] != base_url
+                curr_is_variant = snap["original"] != base_url
+                prev_dist = abs((prev_dt - prev_anchor).total_seconds())
+                curr_dist = abs((curr_dt - curr_anchor).total_seconds())
+                # Prefer canonical URL first; use time distance as tiebreaker
+                curr_better = (prev_is_variant, prev_dist) > (curr_is_variant, curr_dist)
+                if curr_better:
                     discarded_dates.append(kept[-1]["timestamp"])
                     kept[-1] = snap
                 else:
@@ -745,7 +755,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.1.0")
+    log("  Wayback Element Tracker v1.1.1")
     log("=" * 60)
     log(f"  URL        : {cfg['url']}{' (+ variants)' if cfg['url_variants'] else ''}")
     for elem in cfg["elements"]:

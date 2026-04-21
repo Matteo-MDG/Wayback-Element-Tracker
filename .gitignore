@@ -2,7 +2,7 @@
 *.csv
 
 # Default README file with correct formatting
-README_correct_format.md
+default_settings.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
