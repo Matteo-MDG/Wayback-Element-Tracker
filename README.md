@@ -17,6 +17,9 @@ Requirements before running (type into command prompt):
 
 `url`  
 The full URL of the page to track, e.g. `https://www.example.com`
+
+`url_variants`  
+Also search all URL variants sharing the same prefix. It is equivalent to appending `*` to the URL in the Wayback Machine. (`yes` / `no`)
 <br>
 <br>
 ### HTML ELEMENTS
@@ -71,20 +74,20 @@ Which snapshot to pick within each frequency period:
 &nbsp; &nbsp; &nbsp;`numeric` -> 11/5/2023         /  5/11/2023
 
 `year_digits`  
-&nbsp; &nbsp; &nbsp;4  ->  2023  
-&nbsp; &nbsp; &nbsp;2  ->  23
+&nbsp; &nbsp; &nbsp;`4`  ->  2023  
+&nbsp; &nbsp; &nbsp;`2`  ->  23
 
 `date_padding`  
-&nbsp; &nbsp; &nbsp;yes  ->  11/05/2023  
-&nbsp; &nbsp; &nbsp;no   ->  11/5/2023
+&nbsp; &nbsp; &nbsp;`yes`  ->  11/05/2023  
+&nbsp; &nbsp; &nbsp;`no`   ->  11/5/2023
 
 `time_format`  
-&nbsp; &nbsp; &nbsp;12h  ->  2:30 PM  
-&nbsp; &nbsp; &nbsp;24h  ->  14:30
+&nbsp; &nbsp; &nbsp;`12h`  ->  2:30 PM  
+&nbsp; &nbsp; &nbsp;`24h`  ->  14:30
 
 `time_padding`  
-&nbsp; &nbsp; &nbsp;yes  ->  06:50  
-&nbsp; &nbsp; &nbsp;no   ->  6:50
+&nbsp; &nbsp; &nbsp;`yes`  ->  06:50  
+&nbsp; &nbsp; &nbsp;`no`   ->  6:50
 
 `show_seconds`  
 Show seconds in the time? (`yes` / `no`)
@@ -101,6 +104,15 @@ CSV file name
 &nbsp; &nbsp; &nbsp;`rows`     ->  each snapshot is a column, each attribute is a row  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;date | Jan 1 | Feb 1 | ...  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;elem | value | value | ...
+
+`result_padding`  
+Insert blank rows in the CSV file for time periods that had no archived snapshots, so
+the output covers every period continuously between the first and last result.  
+&nbsp; &nbsp; &nbsp;`yes`  -> &nbsp; &nbsp; &nbsp; Jan 1 | Feb 1 | Mar 1 | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; | value | ...  
+
+&nbsp; &nbsp; &nbsp;`no`   -> &nbsp; &nbsp; &nbsp; &nbsp; Jan 1 | Mar 1 | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value | value | ...
 
 `show_month`  
 Show the month in the output CSV? (`yes` / `no`)
@@ -135,4 +147,3 @@ How many times to go back at the end of the script and retry all snapshots that 
 
 `threads`  
 Number of parallel threads for fetching snapshots.
-

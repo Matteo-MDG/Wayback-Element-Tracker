@@ -234,6 +234,43 @@ def anchor_dt_for(dt: datetime, frequency: str, anchor: str) -> datetime:
     return dt
 
 
+def iter_periods(from_dt: datetime, to_dt: datetime, frequency: str):
+    """
+    Yield the start datetime of every period bucket from from_dt's bucket
+    through to_dt's bucket (inclusive), advancing by one period each step.
+    Used by result_padding to enumerate gaps.
+    """
+    if frequency == "yearly":
+        current = datetime(from_dt.year, 1, 1)
+        while current <= to_dt:
+            yield current
+            current = datetime(current.year + 1, 1, 1)
+    elif frequency == "monthly":
+        current = datetime(from_dt.year, from_dt.month, 1)
+        while current <= to_dt:
+            yield current
+            if current.month == 12:
+                current = datetime(current.year + 1, 1, 1)
+            else:
+                current = datetime(current.year, current.month + 1, 1)
+    elif frequency == "weekly":
+        week_start = from_dt - timedelta(days=from_dt.weekday())
+        current = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+        while current <= to_dt:
+            yield current
+            current += timedelta(weeks=1)
+    elif frequency == "daily":
+        current = from_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        while current <= to_dt:
+            yield current
+            current += timedelta(days=1)
+    elif frequency == "hourly":
+        current = from_dt.replace(minute=0, second=0, microsecond=0)
+        while current <= to_dt:
+            yield current
+            current += timedelta(hours=1)
+
+
 # ── Settings Parser ───────────────────────────────────────────────────────────
 def yesno(val: str) -> bool:
     return val.strip().lower() == "yes"
@@ -262,6 +299,8 @@ def load_settings(path="settings.txt") -> dict:
         "show_year": "yes",
         "show_time": "yes",
         "csv_layout": "rows",
+        "result_padding": "no",
+        "url_variants": "no",
         "min_gap": "0.5",
         "delay": "10",
         "retries": "5",
@@ -356,6 +395,8 @@ def load_settings(path="settings.txt") -> dict:
         "show_year": yesno(raw["show_year"]),
         "show_time": yesno(raw["show_time"]),
         "csv_layout": raw["csv_layout"].lower(),
+        "result_padding": yesno(raw["result_padding"]),
+        "url_variants": yesno(raw["url_variants"]),
         "min_gap_secs": min_gap_secs,
         "min_gap_frac": float(raw["min_gap"]),
         "output": raw["output"],
@@ -368,8 +409,9 @@ def load_settings(path="settings.txt") -> dict:
 
 # ── Step 1: Get Snapshot List ─────────────────────────────────────────────────
 def get_snapshots(cfg: dict) -> list:
+    cdx_url = cfg["url"] + ("*" if cfg["url_variants"] else "")
     params = {
-        "url": cfg["url"],
+        "url": cdx_url,
         "output": "json",
         "fl": "timestamp,original",
         "collapse": "digest",
@@ -380,7 +422,7 @@ def get_snapshots(cfg: dict) -> list:
     if cfg["to_date"]:
         params["to"] = cfg["to_date"]
 
-    log(f"[CDX]    Querying snapshots for: {cfg['url']}")
+    log(f"[CDX]    Querying snapshots for: {cdx_url}")
     for attempt in range(1, cfg["retries"] + 1):
         try:
             resp = requests.get(CDX_API, params=params, timeout=30)
@@ -514,6 +556,7 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
 
             buffer_and_flush(index, "\n".join(lines))
             return {
+                "timestamp": timestamp,
                 "date": date_str,
                 "time": time_str,
                 "elem_values": elem_values,
@@ -539,6 +582,7 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
 
     buffer_and_flush(index, f"{prefix} ... failed ({last_err})")
     return {
+        "timestamp": timestamp,
         "date": date_str,
         "time": time_str,
         "elem_values": {elem["slot"]: [] for elem in cfg["elements"]},
@@ -556,6 +600,50 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
     show_time = cfg["show_time"]
     elements = cfg["elements"]
     layout = cfg["csv_layout"]
+
+    # ── Optional result padding ───────────────────────────────────────────────
+    # When result_padding is enabled and a regular frequency is in use, insert
+    # blank rows for every period bucket that had no valid snapshot, so the
+    # output spans every period continuously between the first and last result.
+    frequency = cfg["frequency"]
+    if cfg["result_padding"] and frequency != "all":
+        freq_fmt = FREQ_MAP[frequency]
+        # Map each observed bucket key -> its result
+        bucket_map: dict = {}
+        for r in results:
+            if r and r.get("timestamp"):
+                key = ts_to_dt(r["timestamp"]).strftime(freq_fmt)
+                bucket_map[key] = r
+
+        timestamps = [
+            ts_to_dt(r["timestamp"])
+            for r in results
+            if r and r.get("timestamp")
+        ]
+        if timestamps:
+            first_dt = min(timestamps)
+            last_dt  = max(timestamps)
+            padded = []
+            blank_count = 0
+            for period_dt in iter_periods(first_dt, last_dt, frequency):
+                key = period_dt.strftime(freq_fmt)
+                if key in bucket_map:
+                    padded.append(bucket_map[key])
+                else:
+                    anchor_dt = anchor_dt_for(period_dt, frequency, cfg["sample_anchor"])
+                    date_str, time_str = format_datetime(anchor_dt, cfg)
+                    padded.append({
+                        "timestamp": "",
+                        "date": date_str,
+                        "time": time_str,
+                        "elem_values": {elem["slot"]: [] for elem in elements},
+                        "url": "",
+                        "error": "",
+                    })
+                    blank_count += 1
+            if blank_count:
+                log(f"[Pad]    Inserted {blank_count} blank row(s) for periods with no snapshot.")
+            results = padded
 
     # Each descriptor: (label, fn(result) -> list of values)
     # Console shows them comma-separated; CSV expands into separate columns/rows.
@@ -659,14 +747,14 @@ def main():
     log("=" * 60)
     log("  Wayback Element Tracker v1.0.2")
     log("=" * 60)
-    log(f"  URL        : {cfg['url']}")
+    log(f"  URL        : {cfg['url']}{' (+ variants)' if cfg['url_variants'] else ''}")
     for elem in cfg["elements"]:
         log(f"  Element {elem['slot']}  : {elem['selector']}  (extract: {elem['extract']})")
     log(f"  Date range : {cfg['from_date'] or 'start'} -> {cfg['to_date'] or 'now'}")
     log(f"  Frequency  : {cfg['frequency']}  |  anchor: {cfg['sample_anchor']}  |  min gap: {gap_info}")
     log(f"  Format     : {sample_str}")
     log(f"  Threads    : {cfg['threads']}")
-    log(f"  CSV layout : {cfg['csv_layout']}")
+    log(f"  CSV layout : {cfg['csv_layout']}  |  result padding: {'yes' if cfg['result_padding'] else 'no'}")
     log(f"  Output     : {cfg['output']}")
     log("=" * 60)
 
