@@ -615,6 +615,7 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
     # When result_padding is enabled and a regular frequency is in use, insert
     # blank rows for every period bucket that had no valid snapshot, so the
     # output spans every period continuously between the first and last result.
+    actual_count = len(results)
     frequency = cfg["frequency"]
     if cfg["result_padding"] and frequency != "all":
         freq_fmt = FREQ_MAP[frequency]
@@ -651,8 +652,6 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
                         "error": "",
                     })
                     blank_count += 1
-            if blank_count:
-                log(f"[Pad]    Inserted {blank_count} blank row(s) for periods with no snapshot.")
             results = padded
 
     # Each descriptor: (label, fn(result) -> list of values)
@@ -704,7 +703,7 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
             for label, fn in descriptors:
                 writer.writerow([label] + [fn(r)[0] for r in results])
 
-    log(f"\n[CSV]    Saved {len(results)} snapshots -> {os.path.abspath(output_path)}")
+    log(f"\n[CSV]    Saved {actual_count} snapshots -> {os.path.abspath(output_path)}")
 
 
 # ── Run One Pass Over Snapshot Indices ────────────────────────────────────────
@@ -755,9 +754,9 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.1.1")
+    log("  Wayback Element Tracker v1.1.2")
     log("=" * 60)
-    log(f"  URL        : {cfg['url']}{' (+ variants)' if cfg['url_variants'] else ''}")
+    log(f"  URL        : {cfg['url']}{' (*)' if cfg['url_variants'] else ''}")
     for elem in cfg["elements"]:
         log(f"  Element {elem['slot']}  : {elem['selector']}  (extract: {elem['extract']})")
     log(f"  Date range : {cfg['from_date'] or 'start'} -> {cfg['to_date'] or 'now'}")
