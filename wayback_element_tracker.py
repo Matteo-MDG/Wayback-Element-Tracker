@@ -39,6 +39,106 @@ KNOWN_ATTRS = [
 
 MAX_ELEMENTS = 5
 
+
+# ── URL Filter Helpers ────────────────────────────────────────────────────────
+def parse_url_filters(val: str) -> tuple:
+    """
+    Parse the url_filter setting (a comma-separated list of tokens) into
+    (cdx_wildcard, filters).
+
+      cdx_wildcard : bool  – whether to append '*' to the URL in the CDX query
+      filters      : list  – list of filter dicts, each with keys:
+                               pattern : str | None
+                               mode    : 'exact' | 'contains' | 'all'
+                               negate  : bool  (True when prefixed with '!')
+
+    Token syntax:
+      (blank)      – exact URL only, no variants fetched, no post-filtering
+      *            – all variants, no post-filtering (include-all)
+      key=value    – exact query-string parameter match
+      key=value*   – substring match anywhere in the URL
+      !<token>     – same as above but *excludes* matching URLs instead
+
+    Multiple tokens may be combined with commas, e.g.:
+      sort=usage, !sort=usage_rate
+      *, !page=2, !page=3
+    """
+    v = val.strip()
+    if not v:
+        return False, []          # exact URL, no variants, no post-filter
+
+    filters = []
+    cdx_wildcard = False
+
+    for token in v.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        negate = token.startswith("!")
+        t = token[1:].strip() if negate else token
+
+        if t == "*":
+            cdx_wildcard = True
+            filters.append({"pattern": None, "mode": "all", "negate": negate})
+        elif t.endswith("*"):
+            cdx_wildcard = True
+            filters.append({"pattern": t[:-1], "mode": "contains", "negate": negate})
+        elif t:
+            cdx_wildcard = True
+            filters.append({"pattern": t, "mode": "exact", "negate": negate})
+
+    return cdx_wildcard, filters
+
+
+def _single_filter_matches(url: str, pattern: str | None, mode: str) -> bool:
+    """Return True if url matches one filter rule (ignoring negate)."""
+    if mode == "all":
+        return True
+    if mode == "contains":
+        return pattern in url
+    # mode == "exact": pattern must be one of the individual query-string parameters.
+    # The Wayback CDX stores URLs with & encoded in several ways:
+    #   &amp%3B  (HTML entity &amp; with ; percent-encoded)
+    #   \u0026   (JSON-style unicode escape, stored literally)
+    # Normalise all variants to plain & before parsing.
+    from urllib.parse import urlparse, parse_qs, unquote
+    import html
+    query = urlparse(url).query
+    query = html.unescape(unquote(query))   # &amp%3B -> &amp; -> &
+    query = query.replace('\\u0026', '&')   # literal \u0026 -> &
+    params = parse_qs(query, keep_blank_values=True)
+    if "=" in pattern:
+        key, _, val = pattern.partition("=")
+        return key in params and val in params[key]
+    else:
+        return pattern in params
+
+
+def url_matches_filters(url: str, filters: list) -> bool:
+    """
+    Return True if *url* passes the combined filter list.
+
+    Rules:
+      - Exclude filters (!): URL must not match any of them.
+      - Include filters (no !): URL must match at least one (if any exist).
+      - If there are no include filters, any URL that survives exclusion passes.
+    """
+    if not filters:
+        return True
+
+    include_filters = [f for f in filters if not f["negate"]]
+    exclude_filters = [f for f in filters if f["negate"]]
+
+    for f in exclude_filters:
+        if _single_filter_matches(url, f["pattern"], f["mode"]):
+            return False
+
+    if include_filters:
+        return any(_single_filter_matches(url, f["pattern"], f["mode"])
+                   for f in include_filters)
+
+    return True
+
 # ── Logging & Sequential Print Buffer ────────────────────────────────────────
 _log_lines = []
 _print_lock = threading.Lock()
@@ -60,6 +160,19 @@ def buffer_and_flush(index: int, msg: str):
     """
     with _print_lock:
         _print_buffer[index] = msg
+        while _next_to_print[0] in _print_buffer:
+            m = _print_buffer.pop(_next_to_print[0])
+            print(m)
+            _log_lines.append(m)
+            _next_to_print[0] += 1
+
+
+def drain_buffer():
+    """Flush all remaining consecutive buffer entries.
+    Call this after a threaded run_pass to ensure all output is printed
+    before any subsequent log messages (e.g. end pass notices).
+    """
+    with _print_lock:
         while _next_to_print[0] in _print_buffer:
             m = _print_buffer.pop(_next_to_print[0])
             print(m)
@@ -300,7 +413,7 @@ def load_settings(path="settings.txt") -> dict:
         "show_time": "yes",
         "csv_layout": "rows",
         "result_padding": "no",
-        "url_variants": "no",
+        "url_filter": "",
         "min_gap": "0.5",
         "delay": "10",
         "retries": "5",
@@ -318,6 +431,13 @@ def load_settings(path="settings.txt") -> dict:
                 continue
             key, _, value = line.partition("=")
             key = key.strip().lower().replace("-", "_")
+            # Accept legacy 'url_variants' as an alias for 'url_filter'
+            if key == "url_variants":
+                key = "url_filter"
+                if value.lower() in ("yes", "true", "1"):
+                    value = "*"
+                elif value.lower() in ("no", "false", "0"):
+                    value = ""
             value = value.strip()
             if key in raw and value:
                 raw[key] = value
@@ -337,6 +457,8 @@ def load_settings(path="settings.txt") -> dict:
         sys.exit("[Error] 'min_gap' must be a number >= 0, e.g. 0.5")
 
     min_gap_secs = int(FREQ_SECONDS.get(raw["frequency"], 0) * min_gap_frac)
+
+    cdx_wildcard, url_filters = parse_url_filters(raw["url_filter"])
 
     if not any([yesno(raw["show_month"]), yesno(raw["show_day"]),
                 yesno(raw["show_year"]), yesno(raw["show_time"])]):
@@ -396,7 +518,9 @@ def load_settings(path="settings.txt") -> dict:
         "show_time": yesno(raw["show_time"]),
         "csv_layout": raw["csv_layout"].lower(),
         "result_padding": yesno(raw["result_padding"]),
-        "url_variants": yesno(raw["url_variants"]),
+        "url_filter_raw": raw["url_filter"],
+        "url_filter_cdx_wildcard": cdx_wildcard,
+        "url_filters": url_filters,
         "min_gap_secs": min_gap_secs,
         "min_gap_frac": float(raw["min_gap"]),
         "output": raw["output"],
@@ -409,7 +533,7 @@ def load_settings(path="settings.txt") -> dict:
 
 # ── Step 1: Get Snapshot List ─────────────────────────────────────────────────
 def get_snapshots(cfg: dict) -> list:
-    cdx_url = cfg["url"] + ("*" if cfg["url_variants"] else "")
+    cdx_url = cfg["url"] + ("*" if cfg["url_filter_cdx_wildcard"] else "")
     params = {
         "url": cdx_url,
         "output": "json",
@@ -434,6 +558,19 @@ def get_snapshots(cfg: dict) -> list:
             header, *data = rows
             snapshots = [dict(zip(header, row)) for row in data]
             log(f"[CDX]    Found {len(snapshots)} unique snapshots.")
+
+            # Post-filter by url_filters when any filters are specified
+            if cfg["url_filters"]:
+                before = len(snapshots)
+                snapshots = [
+                    s for s in snapshots
+                    if url_matches_filters(s["original"], cfg["url_filters"])
+                ]
+                log(
+                    f"[CDX]    {len(snapshots)} of {before} snapshots passed "
+                    f"filter(s): {cfg['url_filter_raw']!r}."
+                )
+
             return snapshots
         except Exception as e:
             if attempt < cfg["retries"]:
@@ -754,9 +891,27 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.1.2")
+    log("  Wayback Element Tracker v1.2.0")
     log("=" * 60)
-    log(f"  URL        : {cfg['url']}{' (*)' if cfg['url_variants'] else ''}")
+    filter_raw = cfg["url_filter_raw"]
+    url_filters = cfg["url_filters"]
+    if not filter_raw:
+        filter_suffix = ""
+    elif not url_filters:
+        filter_suffix = " (*)"
+    else:
+        parts = []
+        for f in url_filters:
+            prefix = "!" if f["negate"] else ""
+            if f["mode"] == "all":
+                label = f"{prefix}* (all)"
+            elif f["mode"] == "contains":
+                label = f"{prefix}{f['pattern']}* (contains)"
+            else:
+                label = f"{prefix}{f['pattern']} (exact param)"
+            parts.append(label)
+        filter_suffix = f" (filter: {', '.join(parts)})"
+    log(f"  URL        : {cfg['url']}{filter_suffix}")
     for elem in cfg["elements"]:
         log(f"  Element {elem['slot']}  : {elem['selector']}  (extract: {elem['extract']})")
     log(f"  Date range : {cfg['from_date'] or 'start'} -> {cfg['to_date'] or 'now'}")
@@ -776,6 +931,7 @@ def main():
     results = [None] * total
 
     failed_indices = run_pass(list(range(total)), snapshots, results, total, cfg)
+    drain_buffer()
 
     for pass_num in range(1, cfg["end_passes"] + 1):
         if not failed_indices:
@@ -783,6 +939,7 @@ def main():
         log(f"\n[End pass {pass_num}/{cfg['end_passes']}] Retrying {len(failed_indices)} failed snapshot(s) ...")
         time.sleep(cfg["delay"])
         failed_indices = run_pass(failed_indices, snapshots, results, total, cfg)
+        drain_buffer()
 
     write_csv(results, cfg, cfg["output"])
     save_log(cfg["output"])

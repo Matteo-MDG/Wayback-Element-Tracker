@@ -18,8 +18,16 @@ Requirements before running (type into command prompt):
 `url`  
 The full URL of the page to track, e.g. `https://www.example.com`
 
-`url_variants`  
-Also search all URL variants sharing the same prefix. It is equivalent to appending `*` to the URL in the Wayback Machine. (`yes` / `no`)
+`url_filter`  
+Controls which archived URLs are included in the search (case sensitive).  
+&nbsp; &nbsp; &nbsp;_(blank)_&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> match only the exact URL, no variants  
+&nbsp; &nbsp; &nbsp;`*`&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants (equivalent to appending `*` in the Wayback Machine)  
+&nbsp; &nbsp; &nbsp;`key=value`&nbsp; &nbsp;-> include only URLs where `key=value` is a parameter  
+&nbsp; &nbsp; &nbsp;`key=value*` -> include any URL containing `key=value` as a substring  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; e.g. `key=value1*` matches both `key=value1` and `key=value10`  
+&nbsp; &nbsp; &nbsp;`key=*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> include any URL that has the key regardless of its value  
+&nbsp; &nbsp; &nbsp;`!key=value` -> exclude instead of include (works with all of the above)  
+Multiple filters can be combined with commas, e.g. `key1=value1*, !key2=value2`
 <br>
 <br>
 ### HTML ELEMENTS
@@ -30,17 +38,17 @@ Paste HTML tag from Inspect Element for each one.
 
 `extract_1` ... `extract_5`  
 What to extract from the element:  
-&nbsp; &nbsp; &nbsp;`text`        -> visible text inside the element  
-&nbsp; &nbsp; &nbsp;`title`       -> `title="..."` attribute  
-&nbsp; &nbsp; &nbsp;`href`        -> `href="..."` attribute (links)  
-&nbsp; &nbsp; &nbsp;`src`         -> `src="..."` attribute (images, scripts)  
-&nbsp; &nbsp; &nbsp;`value`       -> `value="..."` attribute (inputs)  
-&nbsp; &nbsp; &nbsp;`content`     -> `content="..."` attribute (meta tags)  
-&nbsp; &nbsp; &nbsp;`alt`         -> `alt="..."` attribute (image descriptions)  
+&nbsp; &nbsp; &nbsp;`text` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> visible text inside the element  
+&nbsp; &nbsp; &nbsp;`title` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> `title="..."` attribute  
+&nbsp; &nbsp; &nbsp;`href` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> `href="..."` attribute (links)  
+&nbsp; &nbsp; &nbsp;`src` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> `src="..."` attribute (images, scripts)  
+&nbsp; &nbsp; &nbsp;`value` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> `value="..."` attribute (inputs)  
+&nbsp; &nbsp; &nbsp;`content` &nbsp; &nbsp; &nbsp; &nbsp;-> `content="..."` attribute (meta tags)  
+&nbsp; &nbsp; &nbsp;`alt` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> `alt="..."` attribute (image descriptions)  
 &nbsp; &nbsp; &nbsp;`placeholder` -> `placeholder="..."` attribute (input hints)  
-&nbsp; &nbsp; &nbsp;`datetime`    -> `datetime="..."` attribute (time elements)  
-&nbsp; &nbsp; &nbsp;`action`      -> `action="..."` attribute (forms)  
-&nbsp; &nbsp; &nbsp;`data-*`      -> any custom data attribute, e.g. data-count, data-value  
+&nbsp; &nbsp; &nbsp;`datetime` &nbsp; &nbsp; &nbsp;-> `datetime="..."` attribute (time elements)  
+&nbsp; &nbsp; &nbsp;`action` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> `action="..."` attribute (forms)  
+&nbsp; &nbsp; &nbsp;`data-*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> any custom data attribute, e.g. data-count, data-value  
 If a selector matches multiple elements on the page, all of them are captured.
 <br>
 <br>
@@ -54,40 +62,40 @@ Format: `YYYYMMDD`. Leave blank to search all available snapshots.
 
 `frequency`  
 Frequency of snapshots to check:  
-&nbsp; &nbsp; &nbsp;`all / hourly / daily / weekly / monthly / yearly`
+&nbsp; &nbsp; &nbsp;`all` / `hourly` / `daily` / `weekly` / `monthly` / `yearly`
 
 `sample_anchor`  
 Which snapshot to pick within each frequency period:  
-&nbsp; &nbsp; &nbsp;`start`  ->  the snapshot closest to the START of the period  
-&nbsp; &nbsp; &nbsp;`end`    ->  the snapshot closest to the END of the period
+&nbsp; &nbsp; &nbsp;`start` ->  the snapshot closest to the START of the period  
+&nbsp; &nbsp; &nbsp;`end` &nbsp; &nbsp;->  the snapshot closest to the END of the period
 <br>
 <br>
 ### DATE & TIME FORMAT
 
 `convention`  
-&nbsp; &nbsp; &nbsp;`us`       -> month first  (November 5, 2023)  
-&nbsp; &nbsp; &nbsp;`european `-> day first    (5 November 2023)
+&nbsp; &nbsp; &nbsp;`us` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> month first  (November 5, 2023)  
+&nbsp; &nbsp; &nbsp;`european` -> day first    (5 November 2023)
 
 `date_style`  
-&nbsp; &nbsp; &nbsp;`long`    -> November 5, 2023  /  5 November 2023  
-&nbsp; &nbsp; &nbsp;`short`   -> Nov 5, 2023       /  5 Nov 2023  
+&nbsp; &nbsp; &nbsp;`long` &nbsp; &nbsp; &nbsp;-> November 5, 2023  /  5 November 2023  
+&nbsp; &nbsp; &nbsp;`short` &nbsp; &nbsp;-> Nov 5, 2023       /  5 Nov 2023  
 &nbsp; &nbsp; &nbsp;`numeric` -> 11/5/2023         /  5/11/2023
 
 `year_digits`  
-&nbsp; &nbsp; &nbsp;`4`  ->  2023  
-&nbsp; &nbsp; &nbsp;`2`  ->  23
+&nbsp; &nbsp; &nbsp;`4` ->  2023  
+&nbsp; &nbsp; &nbsp;`2` ->  23
 
 `date_padding`  
-&nbsp; &nbsp; &nbsp;`yes`  ->  11/05/2023  
-&nbsp; &nbsp; &nbsp;`no`   ->  11/5/2023
+&nbsp; &nbsp; &nbsp;`yes` ->  11/05/2023  
+&nbsp; &nbsp; &nbsp;`no` &nbsp; ->  11/5/2023
 
 `time_format`  
-&nbsp; &nbsp; &nbsp;`12h`  ->  2:30 PM  
-&nbsp; &nbsp; &nbsp;`24h`  ->  14:30
+&nbsp; &nbsp; &nbsp;`12h` ->  2:30 PM  
+&nbsp; &nbsp; &nbsp;`24h` ->  14:30
 
 `time_padding`  
-&nbsp; &nbsp; &nbsp;`yes`  ->  06:50  
-&nbsp; &nbsp; &nbsp;`no`   ->  6:50
+&nbsp; &nbsp; &nbsp;`yes` ->  06:50  
+&nbsp; &nbsp; &nbsp;`no` &nbsp; ->  6:50
 
 `show_seconds`  
 Show seconds in the time? (`yes` / `no`)
@@ -99,20 +107,19 @@ Show seconds in the time? (`yes` / `no`)
 CSV file name
 
 `csv_layout`  
-&nbsp; &nbsp; &nbsp;`columns`  ->  each snapshot is a row, each attribute is a column  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;date | time | element | url | error  
-&nbsp; &nbsp; &nbsp;`rows`     ->  each snapshot is a column, each attribute is a row  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;date | Jan 1 | Feb 1 | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;elem | value | value | ...
+&nbsp; &nbsp; &nbsp;`columns` ->  each snapshot is a row, each attribute is a column  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date | time | element | url | error  
+&nbsp; &nbsp; &nbsp;`rows` &nbsp; &nbsp; &nbsp;->  each snapshot is a column, each attribute is a row  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date | Jan 1 | Feb 1 | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; elem | value | value | ...
 
 `result_padding`  
-Insert blank rows in the CSV file for time periods that had no archived snapshots, so
-the output covers every period continuously between the first and last result.  
-&nbsp; &nbsp; &nbsp;`yes`  -> &nbsp; &nbsp; &nbsp; Jan 1 | Feb 1 | Mar 1 | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; | value | ...  
+Insert blank rows/columns in the CSV file for time periods that had no archived snapshots  
+&nbsp; &nbsp; &nbsp;`yes` -> Jan 1 | Feb 1 | Mar 1 | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; | value | ...  
 
-&nbsp; &nbsp; &nbsp;`no`   -> &nbsp; &nbsp; &nbsp; &nbsp; Jan 1 | Mar 1 | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value | value | ...
+&nbsp; &nbsp; &nbsp;`no` &nbsp; -> Jan 1 | Mar 1 | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value | value | ...
 
 `show_month`  
 Show the month in the output CSV? (`yes` / `no`)
@@ -133,8 +140,8 @@ Show the time in the output CSV? (`yes` / `no`)
 Minimum gap between 2 consecutive selected snapshots, as a fraction of the
 frequency period. Snapshots closer together than this are compared and the
 one farther from its anchor is discarded.  
-&nbsp; &nbsp; &nbsp;`0.5`  ->  half the period (~15 days for monthly, ~12 hours for daily)  
-&nbsp; &nbsp; &nbsp;`0`    ->  disabled
+&nbsp; &nbsp; &nbsp;`0.5` ->  half the period (~15 days for monthly, ~12 hours for daily)  
+&nbsp; &nbsp; &nbsp;`0`&nbsp; &nbsp; ->  disabled
 
 `delay`  
 Seconds to wait between retry attempts and between CDX query retries.
