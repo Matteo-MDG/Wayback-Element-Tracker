@@ -21,12 +21,13 @@ The full URL of the page to track, e.g. `https://www.example.com`
 `url_filter`  
 Controls which archived URLs are included in the search (case sensitive).  
 &nbsp; &nbsp; &nbsp;_(blank)_&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> match only the exact URL, no variants  
-&nbsp; &nbsp; &nbsp;`*`&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
-&nbsp; &nbsp; &nbsp;`/subpage`&nbsp; &nbsp; -> include only URLs whose path contains `/subpage`  
+&nbsp; &nbsp; &nbsp;`*`&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
+&nbsp; &nbsp; &nbsp;`/subpage` &nbsp; -> include only URLs whose path contains `/subpage`,  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; e.g. `/images` matches `example.com/images` and `example.com/images/search`  
-&nbsp; &nbsp; &nbsp;`key=value`&nbsp; &nbsp;-> include only URLs where `key=value` is a query parameter, e.g. `example.com?lang=en`  
-&nbsp; &nbsp; &nbsp;`<filter>*`&nbsp; &nbsp;-> substring match, e.g. `key=*` matches both `key=1` and `key=2`, `images` matches both `/images` and `key=images`  
-&nbsp; &nbsp; &nbsp;`!<filter>`&nbsp; &nbsp;-> exclude instead of include (works with all of the above)  
+&nbsp; &nbsp; &nbsp;`key=value` -> include only URLs where `key=value` is a query parameter,  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; e.g. `example.com?lang=en`  
+&nbsp; &nbsp; &nbsp;`<filter>*` -> substring match, e.g. `key=*` matches both `key=1` and `key=2`, `images*` matches both `/images` and `key=images`  
+&nbsp; &nbsp; &nbsp;`!<filter>` -> exclude instead of include (works with all of the above)  
 Multiple filters can be combined with commas, e.g. `/images`, `key=value`
 <br>
 <br>
