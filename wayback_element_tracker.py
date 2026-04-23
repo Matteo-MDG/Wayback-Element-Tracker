@@ -80,6 +80,9 @@ def parse_url_filters(val: str) -> tuple:
         if t == "*":
             cdx_wildcard = True
             filters.append({"pattern": None, "mode": "all", "negate": negate})
+        elif t.startswith("/"):
+            cdx_wildcard = True
+            filters.append({"pattern": t, "mode": "path", "negate": negate})
         elif t.endswith("*"):
             cdx_wildcard = True
             filters.append({"pattern": t[:-1], "mode": "contains", "negate": negate})
@@ -94,6 +97,9 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str) -> bool:
     """Return True if url matches one filter rule (ignoring negate)."""
     if mode == "all":
         return True
+    if mode == "path":
+        from urllib.parse import urlparse
+        return pattern in urlparse(url).path
     if mode == "contains":
         return pattern in url
     # mode == "exact": pattern must be one of the individual query-string parameters.
@@ -891,7 +897,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.2.0")
+    log("  Wayback Element Tracker v1.2.1")
     log("=" * 60)
     filter_raw = cfg["url_filter_raw"]
     url_filters = cfg["url_filters"]
@@ -905,6 +911,8 @@ def main():
             prefix = "!" if f["negate"] else ""
             if f["mode"] == "all":
                 label = f"{prefix}* (all)"
+            elif f["mode"] == "path":
+                label = f"{prefix}{f['pattern']} (path)"
             elif f["mode"] == "contains":
                 label = f"{prefix}{f['pattern']}* (contains)"
             else:
