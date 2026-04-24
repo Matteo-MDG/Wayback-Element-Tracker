@@ -910,13 +910,13 @@ def main():
         for f in url_filters:
             prefix = "!" if f["negate"] else ""
             if f["mode"] == "all":
-                label = f"{prefix}* (all)"
+                label = f"{prefix}*"
             elif f["mode"] == "path":
-                label = f"{prefix}{f['pattern']} (path)"
+                label = f"{prefix}{f['pattern']}"
             elif f["mode"] == "contains":
-                label = f"{prefix}{f['pattern']}* (contains)"
+                label = f"{prefix}{f['pattern']}*"
             else:
-                label = f"{prefix}{f['pattern']} (exact param)"
+                label = f"{prefix}{f['pattern']}"
             parts.append(label)
         filter_suffix = f" (filter: {', '.join(parts)})"
     log(f"  URL        : {cfg['url']}{filter_suffix}")
