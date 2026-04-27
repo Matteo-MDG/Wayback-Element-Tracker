@@ -20,15 +20,15 @@ The full URL of the page to track, e.g. `https://www.example.com`
 
 `url_filter`  
 Controls which archived URLs are included in the search (case sensitive).  
-&nbsp; &nbsp; &nbsp;_(blank)_&nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> match only the exact URL, no variants  
-&nbsp; &nbsp; &nbsp;`*`&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
+&nbsp; &nbsp; &nbsp;_(blank)_&nbsp; &nbsp; &nbsp; &nbsp; -> match only the exact URL, no variants  
+&nbsp; &nbsp; &nbsp;`*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
 &nbsp; &nbsp; &nbsp;`/subpage` &nbsp; -> include only URLs whose path contains `/subpage`,  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; e.g. `/images` matches `example.com/images` and `example.com/images/search`  
 &nbsp; &nbsp; &nbsp;`key=value` -> include only URLs where `key=value` is a query parameter,  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; e.g. `example.com?lang=en`  
 &nbsp; &nbsp; &nbsp;`<filter>*` -> substring match, e.g. `key=*` matches both `key=1` and `key=2`, `images*` matches both `/images` and `key=images`  
 &nbsp; &nbsp; &nbsp;`!<filter>` -> exclude instead of include (works with all of the above)  
-Multiple filters can be combined with commas, e.g. `/images`, `key=value`
+Multiple filters are separated by spaces, e.g. `/images key=value` or `* !page=2 !page=3`
 <br>
 <br>
 ### HTML ELEMENTS
@@ -51,6 +51,12 @@ What to extract from the element:
 &nbsp; &nbsp; &nbsp;`action` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> `action="..."` attribute (forms)  
 &nbsp; &nbsp; &nbsp;`data-*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> any custom data attribute, e.g. data-count, data-value  
 If a selector matches multiple elements on the page, all of them are captured.
+
+In cases where the element name is vague, enter the parent element and then the target element, e.g. `<div class="paragraph1">` `<span class="paragraph2">text</span>` will target "span.paragraph2" elements that are only inside a "div.paragraph1" element.
+
+To target a specific occurrence of the child element, place a number directly before it, e.g. `<div class="paragraph1">` `2<span class="paragraph2">text</span>` grabs the 2nd span.paragraph2 within div.paragraph1. Placing bare numbers after the parent without a child element boardens the selection to all child elements, e.g. `<div class="paragraph1"> 2 3` simply grabs the 3rd child element of the 2nd child element of "div.paragraph1"
+
+Both of these can be combined and stacked freely.
 <br>
 <br>
 ### DATE RANGE
@@ -108,11 +114,15 @@ Show seconds in the time? (`yes` / `no`)
 CSV file name
 
 `csv_layout`  
-&nbsp; &nbsp; &nbsp;`columns` ->  each snapshot is a row, each attribute is a column  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date | time | element | url | error  
-&nbsp; &nbsp; &nbsp;`rows` &nbsp; &nbsp; &nbsp;->  each snapshot is a column, each attribute is a row  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date | Jan 1 | Feb 1 | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; elem | value | value | ...
+&nbsp; &nbsp; &nbsp;`columns` ->  each attribute is a column, each snapshot is a row  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date | time | element | extract | url | error  
+&nbsp; &nbsp; &nbsp;`rows` &nbsp; &nbsp; &nbsp;->  each attribute is a row, each snapshot is a column  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date &nbsp; &nbsp;| Jan 1 | Feb 1 | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; elem &nbsp; &nbsp;| value | value | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; extract | alt &nbsp; | alt &nbsp; | ...  
+
+The extract type (e.g. `alt`, `text`, `src`) is always written to the row or
+column immediately after the element's value, as a reminder of what was extracted.
 
 `result_padding`  
 Insert blank rows/columns in the CSV file for time periods that had no archived snapshots  

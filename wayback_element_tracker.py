@@ -1,4 +1,5 @@
 import csv
+import re
 import sys
 import time
 import os
@@ -43,7 +44,7 @@ MAX_ELEMENTS = 5
 # ── URL Filter Helpers ────────────────────────────────────────────────────────
 def parse_url_filters(val: str) -> tuple:
     """
-    Parse the url_filter setting (a comma-separated list of tokens) into
+    Parse the url_filter setting (a space-separated list of tokens) into
     (cdx_wildcard, filters).
 
       cdx_wildcard : bool  – whether to append '*' to the URL in the CDX query
@@ -59,9 +60,9 @@ def parse_url_filters(val: str) -> tuple:
       key=value*   – substring match anywhere in the URL
       !<token>     – same as above but *excludes* matching URLs instead
 
-    Multiple tokens may be combined with commas, e.g.:
-      sort=usage, !sort=usage_rate
-      *, !page=2, !page=3
+    Multiple tokens are separated by spaces, e.g.:
+      sort=usage !sort=usage_rate
+      * !page=2 !page=3
     """
     v = val.strip()
     if not v:
@@ -70,7 +71,7 @@ def parse_url_filters(val: str) -> tuple:
     filters = []
     cdx_wildcard = False
 
-    for token in v.split(","):
+    for token in v.split():
         token = token.strip()
         if not token:
             continue
@@ -221,43 +222,99 @@ def extract_value(element, extract: str) -> str:
 # ── HTML Element Parser ───────────────────────────────────────────────────────
 def parse_element_html(raw: str, slot: int) -> tuple:
     """
-    Parse a raw HTML snippet into (css_selector, extractable_attrs).
+    Parse a raw HTML snippet into (selector_chain, extractable_attrs).
 
-    Selector strategy: always tag.class1.class2#id so the selector is
-    as specific as possible and won't match unrelated elements that happen
-    to share a class or id alone.
+    selector_chain is a list of step dicts: {"sel": str|None, "nth": int|None}
+      sel=None  -> bare nth-child step: pick the Nth direct child element
+      nth=None  -> all matches of sel
+      nth=N     -> only the Nth match of sel (1-based)
+
+    Supported formats:
+
+    Single element:
+        element_1 = <img class="card-img" alt="Cannon Cart" src="...">
+
+    Parent > child chain (space between closing and opening tag):
+        element_1 = <div class="card-row"> <span class="value">5%</span>
+        element_1 = <table class="stats"> <tbody> <tr> <td class="pct">
+
+    Nth match of a child selector (integer directly before child tag):
+        element_1 = <div class="paragraph1"> 2<span class="paragraph2">text</span>
+        -> the 2nd span.paragraph2 inside div.paragraph1
+
+    Nth direct child(ren) — bare integers after a tag (no following tag):
+        element_1 = <div class="paragraph1"> 2 3
+        -> the 3rd child element of the 2nd child element of div.paragraph1
     """
-    soup = BeautifulSoup(raw.strip(), "lxml")
-    element = None
-    for tag in soup.find_all(True):
-        if tag.name not in ("html", "body"):
-            element = tag
-            break
-    if element is None:
+    raw = raw.strip()
+
+    # Find all opening HTML tags (exclude closing tags via negative lookahead for /)
+    opening_tag_re = re.compile(r'<(?!/)[^>]+>')
+    tag_matches = list(opening_tag_re.finditer(raw))
+
+    if not tag_matches:
         sys.exit(
             f"[Error] Could not parse element_{slot} in settings.txt.\n"
             f"        Paste the full HTML tag, e.g.:\n"
             f"        element_{slot} = <p class=\"rbx-lead\" title=\"28,760,666\">28M+</p>"
         )
 
-    elem_id = element.get("id", "").strip()
-    classes = element.get("class", [])
-    extractables = get_extractable_attrs(element)
+    def tag_to_selector(tag_html, step_num):
+        """Convert an opening-tag string to a CSS selector string + extractable attrs."""
+        soup = BeautifulSoup(tag_html, "lxml")
+        element = None
+        for tag in soup.find_all(True):
+            if tag.name not in ("html", "body"):
+                element = tag
+                break
+        if element is None:
+            label = (f"element_{slot}" if step_num == 0
+                     else f"element_{slot} (step {step_num + 1})")
+            sys.exit(
+                f"[Error] Could not parse {label} in settings.txt.\n"
+                f"        Paste the full HTML tag, e.g.:\n"
+                f"        element_{slot} = <p class=\"rbx-lead\" title=\"28,760,666\">28M+</p>"
+            )
+        classes = element.get("class", [])
+        sel = element.name
+        if classes:
+            sel += "." + ".".join(classes)
+        elem_id = element.get("id", "").strip()
+        if elem_id:
+            sel += "#" + elem_id
+        return sel, get_extractable_attrs(element)
 
-    # Selector strategy: always build tag.class1.class2#id using whatever
-    # the pasted element provides.  Classes are included even when an id is
-    # present so that, if the same id appears on multiple elements, the
-    # class list narrows the match to the intended one.
-    # Trade-off: if the live page adds extra classes not present in the
-    # pasted snippet, the selector won't match — remove the class portion
-    # manually if that happens.
-    selector = element.name
-    if classes:
-        selector += "." + ".".join(classes)
-    if elem_id:
-        selector += "#" + elem_id
+    steps = []
+    extractables = []
 
-    return selector, extractables
+    # First tag — never has a preceding nth number
+    first_sel, first_attrs = tag_to_selector(tag_matches[0].group(), 0)
+    steps.append({"sel": first_sel, "nth": None})
+    extractables = first_attrs
+
+    # Subsequent opening tags — inspect the gap before each for an nth number
+    for i in range(1, len(tag_matches)):
+        gap = raw[tag_matches[i - 1].end(): tag_matches[i].start()]
+        gap_text = re.sub(r'<[^>]+>', '', gap)      # strip any closing tags in gap
+        nums = re.findall(r'\b(\d+)\b', gap_text)
+        nth = int(nums[-1]) if nums else None
+
+        sel, attrs = tag_to_selector(tag_matches[i].group(), i)
+        steps.append({"sel": sel, "nth": nth})
+        extractables = attrs
+
+    # Suffix after the last opening tag — bare integers become nth-child steps,
+    # but ONLY when there are no closing tags in the suffix. A closing tag means
+    # the user pasted element content (e.g. ">39% </div>"), not navigation indices.
+    suffix = raw[tag_matches[-1].end():]
+    has_closing_tag = bool(re.search(r'</\s*\w', suffix))
+    if not has_closing_tag:
+        suffix_text = re.sub(r'<[^>]+>', '', suffix)
+        for n in re.findall(r'\b(\d+)\b', suffix_text):
+            steps.append({"sel": None, "nth": int(n)})
+            extractables = []                        # no known attrs for bare steps
+
+    return steps, extractables
 
 
 # ── Date / Time Formatting ────────────────────────────────────────────────────
@@ -482,7 +539,17 @@ def load_settings(path="settings.txt") -> dict:
                 f"[Error] extract_{i} = '{extract}' is not recognised.\n"
                 f"        Use 'text', a known attribute, or a data-* attribute."
             )
-        selector, extractables = parse_element_html(html, i)
+        selector_chain, extractables = parse_element_html(html, i)
+
+        def _step_display(step):
+            if step["sel"] is None:
+                return f"[child {step['nth']}]"
+            elif step["nth"] is not None:
+                return f"{step['sel']} [{step['nth']}]"
+            else:
+                return step["sel"]
+
+        selector = " > ".join(_step_display(s) for s in selector_chain)
         if extract != "text" and extract not in extractables:
             others = [a for a in extractables if a != extract]
             msg = (
@@ -492,7 +559,7 @@ def load_settings(path="settings.txt") -> dict:
             if others:
                 msg += f"\n          Other available: {', '.join(others)}"
             print(msg)
-        elements.append({"slot": i, "selector": selector, "extract": extract})
+        elements.append({"slot": i, "selector_chain": selector_chain, "selector": selector, "extract": extract})
 
     if not elements:
         sys.exit("[Error] At least one element_1 through element_5 must be set.")
@@ -691,10 +758,38 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
             lines = [prefix]
 
             for elem in cfg["elements"]:
-                sel = elem["selector"]
+                sel_chain = elem["selector_chain"]
                 extract = elem["extract"]
-                matches = soup.select(sel)
-                label = f"  {sel:<{max_sel_len}}"
+                sel_display = elem["selector"]  # last/only step label
+                label = f"  {sel_display:<{max_sel_len}}"
+
+                # Walk the selector chain: start from the whole document,
+                # then narrow into matching children at each step.
+                # Each step is {"sel": str|None, "nth": int|None}.
+                #   sel=None  -> pick the nth direct child element of each scope
+                #   nth=None  -> keep all matches of sel
+                #   nth=N     -> keep only the Nth match of sel (1-based)
+                current_scope = [soup]
+                for step in sel_chain:
+                    sel = step["sel"]
+                    nth = step["nth"]
+                    next_scope = []
+                    for scope in current_scope:
+                        if sel is None:
+                            # Bare nth-child step: pick among direct element children
+                            children = [c for c in scope.children
+                                        if hasattr(c, "name") and c.name]
+                            if nth is not None and 1 <= nth <= len(children):
+                                next_scope.append(children[nth - 1])
+                        else:
+                            found = scope.select(sel)
+                            if nth is not None:
+                                if 1 <= nth <= len(found):
+                                    next_scope.append(found[nth - 1])
+                            else:
+                                next_scope.extend(found)
+                    current_scope = next_scope
+                matches = current_scope
                 if not matches:
                     elem_values[elem["slot"]] = []
                     lines.append(f"{label}: (no element)")
@@ -817,16 +912,18 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
     for elem in elements:
         slot = elem["slot"]
         sel = elem["selector"]
+        extract = elem["extract"]
         count = max_per_slot[slot]
+        label_base = f"{sel} ({extract})"
         if count == 1:
 
             def make_fn(s):
                 return lambda r: r["elem_values"].get(s, [""])[:1] or [""]
 
-            descriptors.append((sel, make_fn(slot)))
+            descriptors.append((label_base, make_fn(slot)))
         else:
             for i in range(count):
-                label = f"{sel} [{i+1}]"
+                label = f"{sel} [{i+1}] ({extract})"
 
                 def make_fn(s, idx):
                     return lambda r: [(r["elem_values"].get(s, []) + [""] * (idx + 1))[idx]]
@@ -897,7 +994,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.2.1")
+    log("  Wayback Element Tracker v1.3.0")
     log("=" * 60)
     filter_raw = cfg["url_filter_raw"]
     url_filters = cfg["url_filters"]
