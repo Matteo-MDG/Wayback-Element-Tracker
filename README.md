@@ -19,7 +19,7 @@ Requirements before running (type into command prompt):
 The full URL of the page to track, e.g. `https://www.example.com`
 
 `url_filter`  
-Controls which archived URLs are included in the search (case sensitive). URLs must match at least one filter or will else be skipped.  
+Controls which archived URLs are included in the search. URLs must satisfy the filter(s) or will else be skipped.  
 &nbsp; &nbsp; &nbsp;_(blank)_&nbsp; &nbsp; &nbsp; &nbsp; -> match only the exact URL, no variants  
 &nbsp; &nbsp; &nbsp;`*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
 &nbsp; &nbsp; &nbsp;`/subpage` &nbsp; -> include only URLs whose path contains `/subpage`,  
@@ -28,7 +28,16 @@ Controls which archived URLs are included in the search (case sensitive). URLs m
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; e.g. `example.com?lang=en`  
 &nbsp; &nbsp; &nbsp;`<filter>*` -> substring match, e.g. `key=*` matches both `key=1` and `key=2`, `images*` matches both `/images` and `key=images`  
 &nbsp; &nbsp; &nbsp;`!<filter>` -> exclude instead of include (works with all of the above)  
-Multiple filters are separated by spaces, e.g. `/images key=value` or `* !page=2 !page=3`
+Multiple filters are separated by spaces, e.g. `/images` `key=value` or `!page=2` `!page=3`
+
+`case_sensitive`  
+Whether filter matching is case sensitive (`yes` / `no`) 
+
+`filter_mode`  
+How multiple filters are combined (`any` / `all`)  
+&nbsp; &nbsp; &nbsp;`any` -> URL must match at least one filter — OR logic (default)  
+&nbsp; &nbsp; &nbsp;`all` -> URL must match every filter  
+Exclusion filters (`!`) are always treated as `any` regardless of this setting.
 <br>
 <br>
 ### HTML ELEMENTS
@@ -80,29 +89,29 @@ Which snapshot to pick within each frequency period:
 ### DATE & TIME FORMAT
 
 `convention`  
-&nbsp; &nbsp; &nbsp;`us` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> month first  (November 5, 2023)  
-&nbsp; &nbsp; &nbsp;`european` -> day first    (5 November 2023)
+&nbsp; &nbsp; &nbsp;`us` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> month first (`November 5, 2023`)  
+&nbsp; &nbsp; &nbsp;`european` -> day first (`5 November 2023`)
 
 `date_style`  
-&nbsp; &nbsp; &nbsp;`long` &nbsp; &nbsp; &nbsp;-> November 5, 2023  /  5 November 2023  
-&nbsp; &nbsp; &nbsp;`short` &nbsp; &nbsp;-> Nov 5, 2023       /  5 Nov 2023  
-&nbsp; &nbsp; &nbsp;`numeric` -> 11/5/2023         /  5/11/2023
+&nbsp; &nbsp; &nbsp;`long` &nbsp; &nbsp; &nbsp;-> `November 5, 2023` / `5 November 2023`  
+&nbsp; &nbsp; &nbsp;`short` &nbsp; &nbsp;-> `Nov 5, 2023` / `5 Nov 2023`  
+&nbsp; &nbsp; &nbsp;`numeric` -> `11/5/2023` / `5/11/2023`
 
 `year_digits`  
-&nbsp; &nbsp; &nbsp;`4` ->  2023  
-&nbsp; &nbsp; &nbsp;`2` ->  23
+&nbsp; &nbsp; &nbsp;`4` -> `2023`  
+&nbsp; &nbsp; &nbsp;`2` -> `23`
 
 `date_padding`  
-&nbsp; &nbsp; &nbsp;`yes` ->  11/05/2023  
-&nbsp; &nbsp; &nbsp;`no` &nbsp; ->  11/5/2023
+&nbsp; &nbsp; &nbsp;`yes` -> `11/05/2023`  
+&nbsp; &nbsp; &nbsp;`no` &nbsp; -> `11/5/2023`
 
 `time_format`  
-&nbsp; &nbsp; &nbsp;`12h` ->  2:30 PM  
-&nbsp; &nbsp; &nbsp;`24h` ->  14:30
+&nbsp; &nbsp; &nbsp;`12h` -> `2:30 PM`  
+&nbsp; &nbsp; &nbsp;`24h` -> `14:30`
 
 `time_padding`  
-&nbsp; &nbsp; &nbsp;`yes` ->  06:50  
-&nbsp; &nbsp; &nbsp;`no` &nbsp; ->  6:50
+&nbsp; &nbsp; &nbsp;`yes` -> `06:50`  
+&nbsp; &nbsp; &nbsp;`no` &nbsp; -> `6:50`
 
 `show_seconds`  
 Show seconds in the time? (`yes` / `no`)
@@ -113,20 +122,23 @@ Show seconds in the time? (`yes` / `no`)
 `output`  
 CSV file name
 
+`file_override`  
+Whether to overwrite the output file if it already exists (`yes` / `no`)
+
 `csv_layout`  
 &nbsp; &nbsp; &nbsp;`columns` ->  each attribute is a column, each snapshot is a row  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date | time | element | url | error  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `time` | `element` | `url` | `error`  
 &nbsp; &nbsp; &nbsp;`rows` &nbsp; &nbsp; &nbsp;->  each attribute is a row, each snapshot is a column  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date &nbsp;| Jan 1 | Feb 1 | ...   
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; elem | value | value | ... 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `Jan 1` | `Feb 1` | ...   
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `elem` | `value` | `value` | ... 
 
-`result_padding`  
+`padding`  
 Insert blank rows/columns in the CSV file for time periods that had no archived snapshots  
-&nbsp; &nbsp; &nbsp;`yes` -> Jan 1 | Feb 1 | Mar 1 | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; | value | ...  
+&nbsp; &nbsp; &nbsp;`yes` -> `Jan 1` | `Feb 1` | `Mar 1` | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;`value` | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;| `value `| ...  
 
-&nbsp; &nbsp; &nbsp;`no` &nbsp; -> Jan 1 | Mar 1 | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;value | value | ...
+&nbsp; &nbsp; &nbsp;`no` &nbsp; -> `Jan 1` | `Mar 1` | ...  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;`value` | `value` | ...
 
 `show_month`  
 Show the month in the output CSV? (`yes` / `no`)
@@ -147,20 +159,20 @@ Show the time in the output CSV? (`yes` / `no`)
 (`yes` / `no`)  
 Writes an additional `[filename]_reformatted` CSV alongside the raw output.  
 The reformatted file pairs 2 elements, with one being a label and the other being a value for the label. The reformatting moves each value element into one row (or column) per unique label,  
-e.g. date &nbsp;| Jan 1 | Feb 1 | ... &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;date | Jan 1 | Feb 1 | ...  
-&nbsp; &nbsp; &nbsp; &nbsp;elem | label | &nbsp;label &nbsp;| ...  &nbsp; -> &nbsp;label | value | value | ...  
-&nbsp; &nbsp; &nbsp; &nbsp;elem | value | value | ...  
+e.g. `date` | `Jan 1` | `Feb 1` | ... &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `Jan 1` | `Feb 1` | ...  
+&nbsp; &nbsp; &nbsp; &nbsp;`elem` | `label` | `label` | ...  &nbsp; -> &nbsp;`label` | `value` | `value` | ...  
+&nbsp; &nbsp; &nbsp; &nbsp;`elem` | `value` | `value` | ...  
 label[i] from a snapshot is paired with value[i] from the same snapshot in cases where there are multiple of the same elements.
 
-`reformat_label_element`  
+`label_element`  
 The element index whose values become the labels in the
 reformatted file, e.g. `2` will treat the `element_2` element as the label.
 
-`reformat_value_element`  
+`value_element`  
 The element index whose values become the values (the changing data to track
 across snapshots) in the reformatted file, e.g. `3` will treat the `element_3` element as the value to track.
 
-`reformat_sort`  
+`sort`  
 How to order the label rows / columns in the reformatted file:  
 &nbsp; &nbsp; &nbsp;`unsorted` -> labels appear in first-seen order  
 &nbsp; &nbsp; &nbsp;`alphabet` -> alphabetical A-Z (case-insensitive)  

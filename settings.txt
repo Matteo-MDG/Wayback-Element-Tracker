@@ -1,6 +1,8 @@
 # --- URL -------------------------------------------------------------------------------------------------
 url = 
-url_filter = 
+filter = 
+case_sensitive = yes
+filter_mode = any
 
 # --- HTML ELEMENTS ---------------------------------------------------------------------------------------
 element_1 = 
@@ -37,8 +39,9 @@ show_seconds = no
 
 # --- OUTPUT ----------------------------------------------------------------------------------------------
 output = wayback_results.csv
+file_override = yes
 csv_layout = rows
-result_padding = no
+padding = no
 show_month = yes
 show_day = yes
 show_year = yes
@@ -46,9 +49,9 @@ show_time = yes
 
 # --- REFORMAT --------------------------------------------------------------------------------------------
 reformat = no
-reformat_label_element = 
-reformat_value_element = 
-reformat_sort = alphabet
+label_element = 
+value_element = 
+sort = alphabet
 
 # --- ADVANCED --------------------------------------------------------------------------------------------
 min_gap = 0.5

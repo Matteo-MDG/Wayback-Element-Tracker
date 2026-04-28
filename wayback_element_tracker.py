@@ -42,9 +42,9 @@ MAX_ELEMENTS = 5
 
 
 # ── URL Filter Helpers ────────────────────────────────────────────────────────
-def parse_url_filters(val: str) -> tuple:
+def parse_filters(val: str) -> tuple:
     """
-    Parse the url_filter setting (a space-separated list of tokens) into
+    Parse the filter setting (a space-separated list of tokens) into
     (cdx_wildcard, filters).
 
       cdx_wildcard : bool  – whether to append '*' to the URL in the CDX query
@@ -94,10 +94,14 @@ def parse_url_filters(val: str) -> tuple:
     return cdx_wildcard, filters
 
 
-def _single_filter_matches(url: str, pattern: str | None, mode: str) -> bool:
+def _single_filter_matches(url: str, pattern: str | None, mode: str,
+                           case_sensitive: bool = True) -> bool:
     """Return True if url matches one filter rule (ignoring negate)."""
     if mode == "all":
         return True
+    if not case_sensitive and pattern is not None:
+        url = url.lower()
+        pattern = pattern.lower()
     if mode == "path":
         from urllib.parse import urlparse
         return pattern in urlparse(url).path
@@ -121,13 +125,16 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str) -> bool:
         return pattern in params
 
 
-def url_matches_filters(url: str, filters: list) -> bool:
+def url_matches_filters(url: str, filters: list,
+                        case_sensitive: bool = True,
+                        filter_and_mode: bool = False) -> bool:
     """
     Return True if *url* passes the combined filter list.
 
     Rules:
       - Exclude filters (!): URL must not match any of them.
-      - Include filters (no !): URL must match at least one (if any exist).
+      - Include filters (no !): URL must match at least one (if any exist),
+        or ALL of them when filter_and_mode=True.
       - If there are no include filters, any URL that survives exclusion passes.
     """
     if not filters:
@@ -137,11 +144,14 @@ def url_matches_filters(url: str, filters: list) -> bool:
     exclude_filters = [f for f in filters if f["negate"]]
 
     for f in exclude_filters:
-        if _single_filter_matches(url, f["pattern"], f["mode"]):
+        if _single_filter_matches(url, f["pattern"], f["mode"], case_sensitive):
             return False
 
     if include_filters:
-        return any(_single_filter_matches(url, f["pattern"], f["mode"])
+        if filter_and_mode:
+            return all(_single_filter_matches(url, f["pattern"], f["mode"], case_sensitive)
+                       for f in include_filters)
+        return any(_single_filter_matches(url, f["pattern"], f["mode"], case_sensitive)
                    for f in include_filters)
 
     return True
@@ -414,7 +424,7 @@ def iter_periods(from_dt: datetime, to_dt: datetime, frequency: str):
     """
     Yield the start datetime of every period bucket from from_dt's bucket
     through to_dt's bucket (inclusive), advancing by one period each step.
-    Used by result_padding to enumerate gaps.
+    Used by padding to enumerate gaps.
     """
     if frequency == "yearly":
         current = datetime(from_dt.year, 1, 1)
@@ -470,22 +480,25 @@ def load_settings(path="settings.txt") -> dict:
         "time_padding": "yes",
         "show_seconds": "no",
         "output": "wayback_results.csv",
+        "file_override": "yes",
         "show_month": "yes",
         "show_day": "yes",
         "show_year": "yes",
         "show_time": "yes",
         "csv_layout": "rows",
-        "result_padding": "no",
-        "url_filter": "",
+        "padding": "no",
+        "filter": "",
+        "case_sensitive": "yes",
+        "filter_mode": "any",
         "min_gap": "0.5",
         "delay": "10",
         "retries": "5",
         "end_passes": "2",
         "threads": "3",
         "reformat": "no",
-        "reformat_label_element": "",
-        "reformat_value_element": "",
-        "reformat_sort": "unsorted",
+        "label_element": "",
+        "value_element": "",
+        "sort": "unsorted",
         **{f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)},
         **{f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)},
     }
@@ -498,9 +511,9 @@ def load_settings(path="settings.txt") -> dict:
                 continue
             key, _, value = line.partition("=")
             key = key.strip().lower().replace("-", "_")
-            # Accept legacy 'url_variants' as an alias for 'url_filter'
+            # Accept legacy 'url_variants' as an alias for 'filter'
             if key == "url_variants":
-                key = "url_filter"
+                key = "filter"
                 if value.lower() in ("yes", "true", "1"):
                     value = "*"
                 elif value.lower() in ("no", "false", "0"):
@@ -525,7 +538,7 @@ def load_settings(path="settings.txt") -> dict:
 
     min_gap_secs = int(FREQ_SECONDS.get(raw["frequency"], 0) * min_gap_frac)
 
-    cdx_wildcard, url_filters = parse_url_filters(raw["url_filter"])
+    cdx_wildcard, filters = parse_filters(raw["filter"])
 
     if not any([yesno(raw["show_month"]), yesno(raw["show_day"]),
                 yesno(raw["show_year"]), yesno(raw["show_time"])]):
@@ -535,31 +548,31 @@ def load_settings(path="settings.txt") -> dict:
     do_reformat = yesno(raw["reformat"])
     reformat_label_slot  = None
     reformat_value_slot  = None
-    reformat_sort = raw["reformat_sort"].strip().lower()
+    sort = raw["sort"].strip().lower()
 
     if do_reformat:
-        if reformat_sort not in ("alphabet", "reverse", "unsorted"):
-            sys.exit("[Error] 'reformat_sort' must be 'alphabet', 'reverse', or 'unsorted'.")
-        # reformat_label_element and reformat_value_element are 1-based slot numbers
+        if sort not in ("alphabet", "reverse", "unsorted"):
+            sys.exit("[Error] 'sort' must be 'alphabet', 'reverse', or 'unsorted'.")
+        # label_element and value_element are 1-based slot numbers
         # referencing the element_N settings (or their labels in the output).
-        rl = raw["reformat_label_element"].strip()
-        rv = raw["reformat_value_element"].strip()
+        rl = raw["label_element"].strip()
+        rv = raw["value_element"].strip()
         if not rl or not rv:
             sys.exit(
-                "[Error] 'reformat_label_element' and 'reformat_value_element' must both be "
+                "[Error] 'label_element' and 'value_element' must both be "
                 "set when reformat = yes.\n"
                 "        Set them to the slot number of the element to use, e.g.:\n"
-                "        reformat_label_element = 1\n"
-                "        reformat_value_element = 2"
+                "        label_element = 1\n"
+                "        value_element = 2"
             )
         try:
             reformat_label_slot = int(rl)
             reformat_value_slot = int(rv)
         except ValueError:
-            sys.exit("[Error] 'reformat_label_element' and 'reformat_value_element' must be "
+            sys.exit("[Error] 'label_element' and 'value_element' must be "
                      "integers matching an element_N slot number.")
         if reformat_label_slot == reformat_value_slot:
-            sys.exit("[Error] 'reformat_label_element' and 'reformat_value_element' must be "
+            sys.exit("[Error] 'label_element' and 'value_element' must be "
                      "different elements.")
 
 
@@ -626,13 +639,16 @@ def load_settings(path="settings.txt") -> dict:
         "show_year": yesno(raw["show_year"]),
         "show_time": yesno(raw["show_time"]),
         "csv_layout": raw["csv_layout"].lower(),
-        "result_padding": yesno(raw["result_padding"]),
-        "url_filter_raw": raw["url_filter"],
-        "url_filter_cdx_wildcard": cdx_wildcard,
-        "url_filters": url_filters,
+        "padding": yesno(raw["padding"]),
+        "filter_raw": raw["filter"],
+        "filter_cdx_wildcard": cdx_wildcard,
+        "filters": filters,
+        "case_sensitive": yesno(raw["case_sensitive"]),
+        "filter_and_mode": raw["filter_mode"].strip().lower() == "all",
         "min_gap_secs": min_gap_secs,
         "min_gap_frac": float(raw["min_gap"]),
         "output": raw["output"],
+        "file_override": yesno(raw["file_override"]),
         "delay": float(raw["delay"]),
         "retries": int(raw["retries"]),
         "end_passes": int(raw["end_passes"]),
@@ -640,13 +656,13 @@ def load_settings(path="settings.txt") -> dict:
         "reformat": do_reformat,
         "reformat_label_slot": reformat_label_slot,
         "reformat_value_slot": reformat_value_slot,
-        "reformat_sort": reformat_sort,
+        "sort": sort,
     }
 
 
 # ── Step 1: Get Snapshot List ─────────────────────────────────────────────────
 def get_snapshots(cfg: dict) -> list:
-    cdx_url = cfg["url"] + ("*" if cfg["url_filter_cdx_wildcard"] else "")
+    cdx_url = cfg["url"] + ("*" if cfg["filter_cdx_wildcard"] else "")
     params = {
         "url": cdx_url,
         "output": "json",
@@ -672,16 +688,20 @@ def get_snapshots(cfg: dict) -> list:
             snapshots = [dict(zip(header, row)) for row in data]
             log(f"[CDX]    Found {len(snapshots)} unique snapshots.")
 
-            # Post-filter by url_filters when any filters are specified
-            if cfg["url_filters"]:
+            # Post-filter by filters when any filters are specified
+            if cfg["filters"]:
                 before = len(snapshots)
                 snapshots = [
                     s for s in snapshots
-                    if url_matches_filters(s["original"], cfg["url_filters"])
+                    if url_matches_filters(
+                        s["original"], cfg["filters"],
+                        cfg["case_sensitive"],
+                        cfg["filter_and_mode"],
+                    )
                 ]
                 log(
                     f"[CDX]    {len(snapshots)} of {before} snapshots passed "
-                    f"filter(s): {cfg['url_filter_raw']!r}."
+                    f"filter(s): {cfg['filter_raw']!r}."
                 )
 
             return snapshots
@@ -880,15 +900,15 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
 
 
 # ── Result Padding ────────────────────────────────────────────────────────────
-def apply_result_padding(results: list, cfg: dict) -> list:
+def apply_padding(results: list, cfg: dict) -> list:
     """
-    When result_padding is enabled and a regular frequency is in use, return a
+    When padding is enabled and a regular frequency is in use, return a
     new list that inserts blank entries for every period bucket that had no valid
     snapshot, so the output spans every period continuously between the first and
     last result. Returns the original list unchanged if padding is not applicable.
     """
     frequency = cfg["frequency"]
-    if not cfg["result_padding"] or frequency == "all":
+    if not cfg["padding"] or frequency == "all":
         return results
 
     freq_fmt = FREQ_MAP[frequency]
@@ -929,6 +949,25 @@ def apply_result_padding(results: list, cfg: dict) -> list:
     return padded
 
 
+# ── Output Path Resolution ────────────────────────────────────────────────────
+def resolve_output_path(path: str, override: bool) -> str:
+    """
+    Return *path* unchanged when override is True or the file doesn't exist.
+    When override is False and the file already exists, append an incrementing
+    counter suffix before the extension until a free filename is found.
+    E.g. wayback_results.csv -> wayback_results_1.csv -> wayback_results_2.csv
+    """
+    if override or not os.path.exists(path):
+        return path
+    base, ext = os.path.splitext(path)
+    counter = 1
+    while True:
+        candidate = f"{base}_{counter}{ext}"
+        if not os.path.exists(candidate):
+            return candidate
+        counter += 1
+
+
 # ── Step 4: Write CSV ─────────────────────────────────────────────────────────
 def write_csv(results: list, cfg: dict, output_path: str) -> None:
     if not results:
@@ -940,7 +979,7 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
     layout = cfg["csv_layout"]
 
     actual_count = len(results)
-    results = apply_result_padding(results, cfg)
+    results = apply_padding(results, cfg)
 
     # Each descriptor: (label, fn(result) -> list of values)
     # Console shows them comma-separated; CSV expands into separate columns/rows.
@@ -1027,18 +1066,18 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
     label_slot = cfg["reformat_label_slot"]
     value_slot = cfg["reformat_value_slot"]
     layout     = cfg["csv_layout"]
-    sort_mode  = cfg["reformat_sort"]
+    sort_mode  = cfg["sort"]
     show_time  = cfg["show_time"]
 
-    results = apply_result_padding(results, cfg)
+    results = apply_padding(results, cfg)
 
     # Validate that both slots were actually tracked
     tracked_slots = {e["slot"] for e in cfg["elements"]}
     if label_slot not in tracked_slots:
-        log(f"[Reformat] Warning: reformat_label_element={label_slot} was not tracked. Skipping reformat.")
+        log(f"[Reformat] Warning: label_element={label_slot} was not tracked. Skipping reformat.")
         return
     if value_slot not in tracked_slots:
-        log(f"[Reformat] Warning: reformat_value_element={value_slot} was not tracked. Skipping reformat.")
+        log(f"[Reformat] Warning: value_element={value_slot} was not tracked. Skipping reformat.")
         return
 
     # Guard: if either element produced only one unique value across ALL snapshots
@@ -1183,17 +1222,17 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.4.0")
+    log("  Wayback Element Tracker v1.4.1")
     log("=" * 60)
-    filter_raw = cfg["url_filter_raw"]
-    url_filters = cfg["url_filters"]
+    filter_raw = cfg["filter_raw"]
+    filters = cfg["filters"]
     if not filter_raw:
         filter_suffix = ""
-    elif not url_filters:
+    elif not filters:
         filter_suffix = " (*)"
     else:
         parts = []
-        for f in url_filters:
+        for f in filters:
             prefix = "!" if f["negate"] else ""
             if f["mode"] == "all":
                 label = f"{prefix}*"
@@ -1204,7 +1243,9 @@ def main():
             else:
                 label = f"{prefix}{f['pattern']}"
             parts.append(label)
-        filter_suffix = f" (filter: {', '.join(parts)})"
+        mode_tag = "AND" if cfg["filter_and_mode"] else "OR"
+        case_tag = "case-sensitive" if cfg["case_sensitive"] else "case-insensitive"
+        filter_suffix = f" (filter [{mode_tag}, {case_tag}]: {', '.join(parts)})"
     log(f"  URL        : {cfg['url']}{filter_suffix}")
     for elem in cfg["elements"]:
         log(f"  Element {elem['slot']}  : {elem['selector']}  (extract: {elem['extract']})")
@@ -1212,11 +1253,12 @@ def main():
     log(f"  Frequency  : {cfg['frequency']}  |  anchor: {cfg['sample_anchor']}  |  min gap: {gap_info}")
     log(f"  Format     : {sample_str}")
     log(f"  Threads    : {cfg['threads']}")
-    log(f"  CSV layout : {cfg['csv_layout']}  |  result padding: {'yes' if cfg['result_padding'] else 'no'}")
-    log(f"  Output     : {cfg['output']}")
+    log(f"  CSV layout : {cfg['csv_layout']}  |  result padding: {'yes' if cfg['padding'] else 'no'}")
+    override_str = "yes" if cfg["file_override"] else "no"
+    log(f"  Output     : {cfg['output']}  |  override: {override_str}")
     if cfg["reformat"]:
         log(f"  Reformat   : yes  |  label elem: {cfg['reformat_label_slot']}  |  "
-            f"value elem: {cfg['reformat_value_slot']}  |  sort: {cfg['reformat_sort']}")
+            f"value elem: {cfg['reformat_value_slot']}  |  sort: {cfg['sort']}")
     log("=" * 60)
 
     snapshots = get_snapshots(cfg)
@@ -1238,10 +1280,13 @@ def main():
         failed_indices = run_pass(failed_indices, snapshots, results, total, cfg)
         drain_buffer()
 
-    write_csv(results, cfg, cfg["output"])
+    output_path = resolve_output_path(cfg["output"], cfg["file_override"])
+    if output_path != cfg["output"]:
+        log(f"[CSV]    '{cfg['output']}' already exists -- writing to '{output_path}' instead.")
+    write_csv(results, cfg, output_path)
     if cfg["reformat"]:
-        reformat_csv(results, cfg, cfg["output"])
-    save_log(cfg["output"])
+        reformat_csv(results, cfg, output_path)
+    save_log(output_path)
 
     elapsed = time.time() - start_time
     mins, secs = divmod(int(elapsed), 60)
