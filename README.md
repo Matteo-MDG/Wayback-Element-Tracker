@@ -24,7 +24,7 @@ Controls which archived URLs are included in the search. URLs must satisfy the f
 &nbsp; &nbsp; &nbsp;`filter_all` -> URL must match every filter
 
 Both fields support the same filter syntax and can be used independently or together.  
-&nbsp; &nbsp; &nbsp;_(blank)_&nbsp; &nbsp; &nbsp; &nbsp; -> match only the exact URL, no variants  
+&nbsp; &nbsp; &nbsp;*(blank)*&nbsp; &nbsp; &nbsp; &nbsp; -> match only the exact URL, no variants  
 &nbsp; &nbsp; &nbsp;`*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
 &nbsp; &nbsp; &nbsp;`/subpage` &nbsp; -> include only URLs whose path contains `/subpage`,  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `/images` matches `example.com/images` and `example.com/images/search`  
@@ -61,11 +61,16 @@ What to extract from the element:
 &nbsp; &nbsp; &nbsp;`data-*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> any custom data attribute, e.g. `data-count`, `data-value`  
 If a selector matches multiple elements on the page, all of them are captured.
 
-In cases where the element name is vague, enter the parent element and then the target element, e.g. `<div class="paragraph1">` `<span class="paragraph2">text</span>` will target `span.paragraph2` elements that are only inside a `div.paragraph1` element.
+A parent element can be entered before the target element, separated by spaces,  
+e.g. `<div class="paragraph1">` `<span class="paragraph2">text</span>` will target `span.paragraph2` elements that are only inside a `div.paragraph1` element.
 
-To target a specific occurrence of the child element, place a number directly before it, e.g. `<div class="paragraph1">` `2<span class="paragraph2">text</span>` grabs the 2nd `span.paragraph2` within `div.paragraph1`. Placing bare numbers after the parent without a child element boardens the selection to all child elements, e.g. `<div class="paragraph1"> 2 3` simply grabs the 3rd child element of the 2nd child element of `div.paragraph1`
+To target a specific occurrence of the child element, place a number directly before it,  
+e.g. `<div class="paragraph1">` `2<span class="paragraph2">text</span>` grabs the 2nd `span.paragraph2` within `div.paragraph1`.  
 
-Both of these can be combined and stacked freely.
+Placing bare numbers after the parent without a child element boardens the selection to all child elements,  
+e.g. `<div class="paragraph1"> 2 3` simply grabs the 3rd child element of the 2nd child element of `div.paragraph1`
+
+All of these can be combined and stacked freely.
 <br>
 <br>
 ### DATE RANGE
@@ -162,15 +167,18 @@ The reformatted file pairs 2 elements, with one being a label and the other bein
 e.g. `date` | `Jan 1` | `Feb 1` | ... &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `Jan 1` | `Feb 1` | ...  
 &nbsp; &nbsp; &nbsp; &nbsp;`elem` | `label` | `label` | ...  &nbsp; -> &nbsp;`label` | `value` | `value` | ...  
 &nbsp; &nbsp; &nbsp; &nbsp;`elem` | `value` | `value` | ...  
-label[i] from a snapshot is paired with value[i] from the same snapshot in cases where there are multiple of the same elements.
+In cases where there are multiple of the same elements, the label index from a snapshot is paired with value index from the same snapshot.
 
-`label_element`  
-The element index whose values become the labels in the
-reformatted file, e.g. `2` will treat the `element_2` element as the label.
+`label_elements`  
+The index of the element(s) whose output become the labels in the reformatted file,  
+e.g. `2` will treat the `element_2` element as the label.
 
-`value_element`  
-The element index whose values become the values (the changing data to track
-across snapshots) in the reformatted file, e.g. `3` will treat the `element_3` element as the value to track.
+`value_elements`  
+The index of the element(s) whose output become the values (the changing data across snapshots) in the reformatted file,  
+e.g. `3` will treat the `element_3` element as the value to track
+
+For both fields, multiple indexes can be entered, separated by spaces. The index of the label element will be paired with the index of the value element,  
+e.g. for label elements `1` `2` and value elements `3` `4`, elements `1` and `3` will be paired and elements `2` and `4` will be paired
 
 `sort`  
 How to order the label rows / columns in the reformatted file:  

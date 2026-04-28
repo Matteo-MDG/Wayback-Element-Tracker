@@ -511,8 +511,8 @@ def load_settings(path="settings.txt") -> dict:
         "end_passes": "2",
         "threads": "3",
         "reformat": "no",
-        "label_element": "",
-        "value_element": "",
+        "label_elements": "",
+        "value_elements": "",
         "sort": "unsorted",
         **{f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)},
         **{f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)},
@@ -539,6 +539,17 @@ def load_settings(path="settings.txt") -> dict:
 
     if not raw["url"]:
         sys.exit("[Error] 'url' is missing from settings.txt")
+
+    # Strip trailing * from URL — treat it the same as filter_any = *
+    url = raw["url"]
+    if url.endswith("*"):
+        url = url.rstrip("*")
+        if not raw["filter_any"].strip():
+            raw["filter_any"] = "*"
+        # else: filter_any already has tokens; just ensure CDX wildcard fires
+        raw["_url_wildcard"] = "yes"
+    else:
+        raw["_url_wildcard"] = "no"
     if raw["frequency"] not in FREQ_MAP:
         sys.exit(f"[Error] 'frequency' must be one of: {', '.join(FREQ_MAP)}")
     if raw["csv_layout"].lower() not in ("columns", "rows"):
@@ -555,7 +566,7 @@ def load_settings(path="settings.txt") -> dict:
 
     cdx_any, filters_any = parse_filters(raw["filter_any"])
     cdx_all, filters_all = parse_filters(raw["filter_all"])
-    cdx_wildcard = cdx_any or cdx_all
+    cdx_wildcard = cdx_any or cdx_all or (raw["_url_wildcard"] == "yes")
 
     if not any([yesno(raw["show_month"]), yesno(raw["show_day"]),
                 yesno(raw["show_year"]), yesno(raw["show_time"])]):
@@ -563,34 +574,38 @@ def load_settings(path="settings.txt") -> dict:
 
     # ── Reformat validation ───────────────────────────────────────────────────
     do_reformat = yesno(raw["reformat"])
-    reformat_label_slot  = None
-    reformat_value_slot  = None
+    reformat_pairs = []
     sort = raw["sort"].strip().lower()
 
     if do_reformat:
         if sort not in ("alphabet", "reverse", "unsorted"):
             sys.exit("[Error] 'sort' must be 'alphabet', 'reverse', or 'unsorted'.")
-        # label_element and value_element are 1-based slot numbers
-        # referencing the element_N settings (or their labels in the output).
-        rl = raw["label_element"].strip()
-        rv = raw["value_element"].strip()
+        rl = raw["label_elements"].strip()
+        rv = raw["value_elements"].strip()
         if not rl or not rv:
             sys.exit(
-                "[Error] 'label_element' and 'value_element' must both be "
+                "[Error] 'label_elements' and 'value_elements' must both be "
                 "set when reformat = yes.\n"
-                "        Set them to the slot number of the element to use, e.g.:\n"
-                "        label_element = 1\n"
-                "        value_element = 2"
+                "        Use space-separated slot numbers for multiple pairs, e.g.:\n"
+                "        label_elements = 1 2\n"
+                "        value_elements = 3 4"
             )
         try:
-            reformat_label_slot = int(rl)
-            reformat_value_slot = int(rv)
+            label_slots = [int(x) for x in rl.split()]
+            value_slots = [int(x) for x in rv.split()]
         except ValueError:
-            sys.exit("[Error] 'label_element' and 'value_element' must be "
-                     "integers matching an element_N slot number.")
-        if reformat_label_slot == reformat_value_slot:
-            sys.exit("[Error] 'label_element' and 'value_element' must be "
-                     "different elements.")
+            sys.exit("[Error] 'label_elements' and 'value_elements' must be "
+                     "integers matching element_N slot numbers.")
+        if len(label_slots) != len(value_slots):
+            sys.exit(
+                f"[Error] 'label_elements' has {len(label_slots)} slot(s) but "
+                f"'value_elements' has {len(value_slots)}. They must have the same count."
+            )
+        for ls, vs in zip(label_slots, value_slots):
+            if ls == vs:
+                sys.exit(f"[Error] label_elements and value_elements must be different "
+                         f"(slot {ls} appears in both).")
+        reformat_pairs = list(zip(label_slots, value_slots))
 
 
     elements = []
@@ -638,7 +653,7 @@ def load_settings(path="settings.txt") -> dict:
         sys.exit("[Error] 'threads' must be a positive integer.")
 
     return {
-        "url": raw["url"],
+        "url": url,
         "elements": elements,
         "from_date": raw["from_date"],
         "to_date": raw["to_date"],
@@ -672,8 +687,7 @@ def load_settings(path="settings.txt") -> dict:
         "end_passes": int(raw["end_passes"]),
         "threads": threads,
         "reformat": do_reformat,
-        "reformat_label_slot": reformat_label_slot,
-        "reformat_value_slot": reformat_value_slot,
+        "reformat_pairs": reformat_pairs,
         "sort": sort,
     }
 
@@ -1083,67 +1097,73 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
         log("[Reformat] No results to reformat.")
         return
 
-    label_slot = cfg["reformat_label_slot"]
-    value_slot = cfg["reformat_value_slot"]
+    pairs      = cfg["reformat_pairs"]
     layout     = cfg["csv_layout"]
     sort_mode  = cfg["sort"]
     show_time  = cfg["show_time"]
 
     results = apply_padding(results, cfg)
 
-    # Validate that both slots were actually tracked
     tracked_slots = {e["slot"] for e in cfg["elements"]}
-    if label_slot not in tracked_slots:
-        log(f"[Reformat] Warning: label_element={label_slot} was not tracked. Skipping reformat.")
-        return
-    if value_slot not in tracked_slots:
-        log(f"[Reformat] Warning: value_element={value_slot} was not tracked. Skipping reformat.")
-        return
 
-    # Guard: if either element produced only one unique value across ALL snapshots
-    # (i.e. it isn't really a list-style element), the reformat makes no sense.
-    all_labels = [v for r in results if r
-                  for v in r["elem_values"].get(label_slot, [])]
-    all_values = [v for r in results if r
-                  for v in r["elem_values"].get(value_slot, [])]
-    if len(set(all_labels)) <= 1:
-        log("[Reformat] Skipping: label element has only one unique value across all snapshots.")
+    # Validate all pairs up front
+    for label_slot, value_slot in pairs:
+        if label_slot not in tracked_slots:
+            log(f"[Reformat] Warning: label_elements={label_slot} was not tracked. Skipping reformat.")
+            return
+        if value_slot not in tracked_slots:
+            log(f"[Reformat] Warning: value_elements={value_slot} was not tracked. Skipping reformat.")
+            return
+
+    # ── Build ordered labels and snap_maps for each pair ─────────────────────
+    def build_pair(label_slot, value_slot):
+        all_labels = [v for r in results if r for v in r["elem_values"].get(label_slot, [])]
+        all_values = [v for r in results if r for v in r["elem_values"].get(value_slot, [])]
+        if len(set(all_labels)) <= 1:
+            log(f"[Reformat] Skipping pair ({label_slot}->{value_slot}): "
+                f"label element has only one unique value across all snapshots.")
+            return None, None
+        if len(set(all_values)) <= 1:
+            log(f"[Reformat] Skipping pair ({label_slot}->{value_slot}): "
+                f"value element has only one unique value across all snapshots.")
+            return None, None
+
+        seen_labels: list = []
+        seen_set: set = set()
+        for r in results:
+            if not r:
+                continue
+            for lbl in r["elem_values"].get(label_slot, []):
+                if lbl and lbl not in seen_set:
+                    seen_labels.append(lbl)
+                    seen_set.add(lbl)
+
+        if sort_mode == "alphabet":
+            ordered_labels = sorted(seen_labels, key=lambda x: x.lower())
+        elif sort_mode == "reverse":
+            ordered_labels = sorted(seen_labels, key=lambda x: x.lower(), reverse=True)
+        else:
+            ordered_labels = seen_labels
+
+        snap_maps: list = []
+        for r in results:
+            if not r:
+                snap_maps.append({})
+                continue
+            lbls = r["elem_values"].get(label_slot, [])
+            vals = r["elem_values"].get(value_slot, [])
+            snap_maps.append({lbls[i]: vals[i] if i < len(vals) else ""
+                              for i in range(len(lbls))})
+        return ordered_labels, snap_maps
+
+    pair_data = []
+    for label_slot, value_slot in pairs:
+        ordered_labels, snap_maps = build_pair(label_slot, value_slot)
+        if ordered_labels is not None:
+            pair_data.append((ordered_labels, snap_maps))
+
+    if not pair_data:
         return
-    if len(set(all_values)) <= 1:
-        log("[Reformat] Skipping: value element has only one unique value across all snapshots.")
-        return
-
-    # ── Build ordered label list ──────────────────────────────────────────────
-    # Scan all snapshots in order to collect unique labels while preserving
-    # first-seen order (for unsorted) or building the full set (for alphabet/reverse).
-    seen_labels: list = []
-    seen_set: set = set()
-    for r in results:
-        if not r:
-            continue
-        for lbl in r["elem_values"].get(label_slot, []):
-            if lbl and lbl not in seen_set:
-                seen_labels.append(lbl)
-                seen_set.add(lbl)
-
-    if sort_mode == "alphabet":
-        ordered_labels = sorted(seen_labels, key=lambda x: x.lower())
-    elif sort_mode == "reverse":
-        ordered_labels = sorted(seen_labels, key=lambda x: x.lower(), reverse=True)
-    else:
-        ordered_labels = seen_labels  # insertion order
-
-    # ── Build per-snapshot label->value dict ──────────────────────────────────
-    # Align by index: labels[i] maps to values[i] within the same snapshot.
-    snap_maps: list = []   # one dict per result: {label: value}
-    for r in results:
-        if not r:
-            snap_maps.append({})
-            continue
-        lbls = r["elem_values"].get(label_slot, [])
-        vals = r["elem_values"].get(value_slot, [])
-        snap_maps.append({lbls[i]: vals[i] if i < len(vals) else ""
-                          for i in range(len(lbls))})
 
     # ── Snapshot header values (dates/times) ─────────────────────────────────
     snap_dates  = [r["date"]  if r else "" for r in results]
@@ -1158,28 +1178,23 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
         writer = csv.writer(f)
 
         if layout == "rows":
-            # Each row = one label; each column = one snapshot
-            # Row 0:   "date"  + [date per snapshot]
-            # Row 1:   "time"  + [time per snapshot]  (if show_time)
-            # Row 2:   "url"   + [url per snapshot]
-            # Row 3:   "error" + [error per snapshot]
-            # Rows 4+: label rows
             writer.writerow(["date"] + snap_dates)
             if show_time:
                 writer.writerow(["time"] + snap_times)
             writer.writerow(["url"]   + snap_urls)
             writer.writerow(["error"] + snap_errors)
-            for label in ordered_labels:
-                writer.writerow([label] + [snap_maps[i].get(label, "") for i in range(len(results))])
+            for ordered_labels, snap_maps in pair_data:
+                for label in ordered_labels:
+                    writer.writerow([label] + [snap_maps[i].get(label, "") for i in range(len(results))])
 
         else:
-            # columns layout: each column = one label; each row = one snapshot
-            # Header row: "date" | "time"? | "url" | "error" | <labels>
+            # Build header: date | time? | url | error | all labels across all pairs
             header = ["date"]
             if show_time:
                 header.append("time")
             header.extend(["url", "error"])
-            header.extend(ordered_labels)
+            for ordered_labels, _ in pair_data:
+                header.extend(ordered_labels)
             writer.writerow(header)
 
             for i, r in enumerate(results):
@@ -1187,8 +1202,9 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
                 if show_time:
                     row.append(snap_times[i])
                 row.extend([snap_urls[i], snap_errors[i]])
-                for label in ordered_labels:
-                    row.append(snap_maps[i].get(label, ""))
+                for ordered_labels, snap_maps in pair_data:
+                    for label in ordered_labels:
+                        row.append(snap_maps[i].get(label, ""))
                 writer.writerow(row)
 
     log(f"[Reformat] Saved reformatted CSV -> {os.path.abspath(ref_path)}")
@@ -1242,7 +1258,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.4.2")
+    log("  Wayback Element Tracker v1.4.3")
     log("=" * 60)
     filter_any_raw = cfg["filter_any_raw"]
     filter_all_raw = cfg["filter_all_raw"]
@@ -1292,8 +1308,8 @@ def main():
     override_str = "yes" if cfg["file_override"] else "no"
     log(f"  Output     : {cfg['output']}  |  override: {override_str}")
     if cfg["reformat"]:
-        log(f"  Reformat   : yes  |  label elem: {cfg['reformat_label_slot']}  |  "
-            f"value elem: {cfg['reformat_value_slot']}  |  sort: {cfg['sort']}")
+        pairs_str = "  ".join(f"{ls}->{vs}" for ls, vs in cfg["reformat_pairs"])
+        log(f"  Reformat   : yes  |  pairs: {pairs_str}  |  sort: {cfg['sort']}")
     log("=" * 60)
 
     snapshots = get_snapshots(cfg)

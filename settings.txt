@@ -1,18 +1,19 @@
 # --- URL -------------------------------------------------------------------------------------------------
-url = 
-filter_any = 
+url = https://royaleapi.com/cards
+filter_any = *
 filter_all = 
 case_sensitive = yes
 
 # --- HTML ELEMENTS ---------------------------------------------------------------------------------------
-element_1 = 
-extract_1 = 
+element_1 = <img class="deck_card  ui image" style="" loading="lazy" alt="Cannon Cart" src="https://cdns3.royaleapi.com/cdn-cgi/image/w=150,h=180,format=auto/static/img/cards/v9-f09d5c9d/cannon-cart.png">
+extract_1 = alt
 
-element_2 = 
-extract_2 = 
+element_2 = <div class="ui middle aligned list"> 1<div class="item">   
+<div class="right floated content">39% </div>
+extract_2 = text
 
-element_3 = 
-extract_3 = 
+element_3 = <div class="grid_item" data-usage="0.5287920206871075" data-delta="3.6300000000000026" data-winpercent="55.08578773822165" data-windelta="1.6549310282761311" style="position: absolute; left: 0%; top: 0px;"> <a href="/web/20190102093231/https://royaleapi.com/card/barbarian-barrel"> 1
+extract_3 = alt
 
 element_4 = 
 extract_4 = 
@@ -22,10 +23,10 @@ extract_5 =
 
 # --- DATE RANGE ------------------------------------------------------------------------------------------
 from_date = 
-to_date = 
+to_date = 20201022
 
 # --- SNAPSHOT FREQUENCY ----------------------------------------------------------------------------------
-frequency = monthly
+frequency = daily
 sample_anchor = start
 
 # --- DATE & TIME FORMAT ----------------------------------------------------------------------------------
@@ -41,16 +42,16 @@ show_seconds = no
 output = wayback_results.csv
 file_override = yes
 csv_layout = rows
-padding = no
+padding = yes
 show_month = yes
 show_day = yes
 show_year = yes
 show_time = yes
 
 # --- REFORMAT --------------------------------------------------------------------------------------------
-reformat = no
-label_element = 
-value_element = 
+reformat = yes
+label_elements = 3
+value_elements = 2
 sort = alphabet
 
 # --- ADVANCED --------------------------------------------------------------------------------------------
@@ -58,4 +59,4 @@ min_gap = 0.5
 delay = 10
 retries = 5
 end_passes = 2
-threads = 3
+threads = 10
