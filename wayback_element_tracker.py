@@ -482,6 +482,10 @@ def load_settings(path="settings.txt") -> dict:
         "retries": "5",
         "end_passes": "2",
         "threads": "3",
+        "reformat": "no",
+        "reformat_label_element": "",
+        "reformat_value_element": "",
+        "reformat_sort": "unsorted",
         **{f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)},
         **{f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)},
     }
@@ -526,6 +530,38 @@ def load_settings(path="settings.txt") -> dict:
     if not any([yesno(raw["show_month"]), yesno(raw["show_day"]),
                 yesno(raw["show_year"]), yesno(raw["show_time"])]):
         sys.exit("[Error] At least one of show_month/show_day/show_year/show_time must be yes.")
+
+    # ── Reformat validation ───────────────────────────────────────────────────
+    do_reformat = yesno(raw["reformat"])
+    reformat_label_slot  = None
+    reformat_value_slot  = None
+    reformat_sort = raw["reformat_sort"].strip().lower()
+
+    if do_reformat:
+        if reformat_sort not in ("alphabet", "reverse", "unsorted"):
+            sys.exit("[Error] 'reformat_sort' must be 'alphabet', 'reverse', or 'unsorted'.")
+        # reformat_label_element and reformat_value_element are 1-based slot numbers
+        # referencing the element_N settings (or their labels in the output).
+        rl = raw["reformat_label_element"].strip()
+        rv = raw["reformat_value_element"].strip()
+        if not rl or not rv:
+            sys.exit(
+                "[Error] 'reformat_label_element' and 'reformat_value_element' must both be "
+                "set when reformat = yes.\n"
+                "        Set them to the slot number of the element to use, e.g.:\n"
+                "        reformat_label_element = 1\n"
+                "        reformat_value_element = 2"
+            )
+        try:
+            reformat_label_slot = int(rl)
+            reformat_value_slot = int(rv)
+        except ValueError:
+            sys.exit("[Error] 'reformat_label_element' and 'reformat_value_element' must be "
+                     "integers matching an element_N slot number.")
+        if reformat_label_slot == reformat_value_slot:
+            sys.exit("[Error] 'reformat_label_element' and 'reformat_value_element' must be "
+                     "different elements.")
+
 
     elements = []
     for i in range(1, MAX_ELEMENTS + 1):
@@ -601,6 +637,10 @@ def load_settings(path="settings.txt") -> dict:
         "retries": int(raw["retries"]),
         "end_passes": int(raw["end_passes"]),
         "threads": threads,
+        "reformat": do_reformat,
+        "reformat_label_slot": reformat_label_slot,
+        "reformat_value_slot": reformat_value_slot,
+        "reformat_sort": reformat_sort,
     }
 
 
@@ -839,6 +879,56 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
     }
 
 
+# ── Result Padding ────────────────────────────────────────────────────────────
+def apply_result_padding(results: list, cfg: dict) -> list:
+    """
+    When result_padding is enabled and a regular frequency is in use, return a
+    new list that inserts blank entries for every period bucket that had no valid
+    snapshot, so the output spans every period continuously between the first and
+    last result. Returns the original list unchanged if padding is not applicable.
+    """
+    frequency = cfg["frequency"]
+    if not cfg["result_padding"] or frequency == "all":
+        return results
+
+    freq_fmt = FREQ_MAP[frequency]
+    elements = cfg["elements"]
+
+    bucket_map: dict = {}
+    for r in results:
+        if r and r.get("timestamp"):
+            key = ts_to_dt(r["timestamp"]).strftime(freq_fmt)
+            bucket_map[key] = r
+
+    timestamps = [
+        ts_to_dt(r["timestamp"])
+        for r in results
+        if r and r.get("timestamp")
+    ]
+    if not timestamps:
+        return results
+
+    first_dt = min(timestamps)
+    last_dt  = max(timestamps)
+    padded = []
+    for period_dt in iter_periods(first_dt, last_dt, frequency):
+        key = period_dt.strftime(freq_fmt)
+        if key in bucket_map:
+            padded.append(bucket_map[key])
+        else:
+            anchor_dt = anchor_dt_for(period_dt, frequency, cfg["sample_anchor"])
+            date_str, time_str = format_datetime(anchor_dt, cfg)
+            padded.append({
+                "timestamp": "",
+                "date": date_str,
+                "time": time_str,
+                "elem_values": {elem["slot"]: [] for elem in elements},
+                "url": "",
+                "error": "",
+            })
+    return padded
+
+
 # ── Step 4: Write CSV ─────────────────────────────────────────────────────────
 def write_csv(results: list, cfg: dict, output_path: str) -> None:
     if not results:
@@ -849,48 +939,8 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
     elements = cfg["elements"]
     layout = cfg["csv_layout"]
 
-    # ── Optional result padding ───────────────────────────────────────────────
-    # When result_padding is enabled and a regular frequency is in use, insert
-    # blank rows for every period bucket that had no valid snapshot, so the
-    # output spans every period continuously between the first and last result.
     actual_count = len(results)
-    frequency = cfg["frequency"]
-    if cfg["result_padding"] and frequency != "all":
-        freq_fmt = FREQ_MAP[frequency]
-        # Map each observed bucket key -> its result
-        bucket_map: dict = {}
-        for r in results:
-            if r and r.get("timestamp"):
-                key = ts_to_dt(r["timestamp"]).strftime(freq_fmt)
-                bucket_map[key] = r
-
-        timestamps = [
-            ts_to_dt(r["timestamp"])
-            for r in results
-            if r and r.get("timestamp")
-        ]
-        if timestamps:
-            first_dt = min(timestamps)
-            last_dt  = max(timestamps)
-            padded = []
-            blank_count = 0
-            for period_dt in iter_periods(first_dt, last_dt, frequency):
-                key = period_dt.strftime(freq_fmt)
-                if key in bucket_map:
-                    padded.append(bucket_map[key])
-                else:
-                    anchor_dt = anchor_dt_for(period_dt, frequency, cfg["sample_anchor"])
-                    date_str, time_str = format_datetime(anchor_dt, cfg)
-                    padded.append({
-                        "timestamp": "",
-                        "date": date_str,
-                        "time": time_str,
-                        "elem_values": {elem["slot"]: [] for elem in elements},
-                        "url": "",
-                        "error": "",
-                    })
-                    blank_count += 1
-            results = padded
+    results = apply_result_padding(results, cfg)
 
     # Each descriptor: (label, fn(result) -> list of values)
     # Console shows them comma-separated; CSV expands into separate columns/rows.
@@ -944,6 +994,145 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
                 writer.writerow([label] + [fn(r)[0] for r in results])
 
     log(f"\n[CSV]    Saved {actual_count} snapshots -> {os.path.abspath(output_path)}")
+
+
+# ── Step 5: Reformat CSV ──────────────────────────────────────────────────────
+def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
+    """
+    Pivot the raw output so that each unique label value (from reformat_label_slot)
+    becomes its own row (rows layout) or column (columns layout), with snapshot
+    dates/times spread across columns/rows respectively.
+
+    Output structure for rows layout:
+        col 0         : row label  (date / time / url / error / <label values>)
+        cols 1..N     : one per snapshot
+
+    Output structure for columns layout:
+        row 0         : col header (date / time / url / error / <label values>)
+        rows 1..N     : one per snapshot
+
+    The label element and value element are identified by their slot number.
+    For each snapshot the label[i] -> value[i] pairing is built by aligning
+    the parallel lists produced by those two elements (rank i of labels pairs
+    with rank i of values).
+
+    Special rows/cols carried through:
+        date, time   - always first (time only if show_time is enabled)
+        url, error   - always placed after date/time, before the label rows/cols
+    """
+    if not results:
+        log("[Reformat] No results to reformat.")
+        return
+
+    label_slot = cfg["reformat_label_slot"]
+    value_slot = cfg["reformat_value_slot"]
+    layout     = cfg["csv_layout"]
+    sort_mode  = cfg["reformat_sort"]
+    show_time  = cfg["show_time"]
+
+    results = apply_result_padding(results, cfg)
+
+    # Validate that both slots were actually tracked
+    tracked_slots = {e["slot"] for e in cfg["elements"]}
+    if label_slot not in tracked_slots:
+        log(f"[Reformat] Warning: reformat_label_element={label_slot} was not tracked. Skipping reformat.")
+        return
+    if value_slot not in tracked_slots:
+        log(f"[Reformat] Warning: reformat_value_element={value_slot} was not tracked. Skipping reformat.")
+        return
+
+    # Guard: if either element produced only one unique value across ALL snapshots
+    # (i.e. it isn't really a list-style element), the reformat makes no sense.
+    all_labels = [v for r in results if r
+                  for v in r["elem_values"].get(label_slot, [])]
+    all_values = [v for r in results if r
+                  for v in r["elem_values"].get(value_slot, [])]
+    if len(set(all_labels)) <= 1:
+        log("[Reformat] Skipping: label element has only one unique value across all snapshots.")
+        return
+    if len(set(all_values)) <= 1:
+        log("[Reformat] Skipping: value element has only one unique value across all snapshots.")
+        return
+
+    # ── Build ordered label list ──────────────────────────────────────────────
+    # Scan all snapshots in order to collect unique labels while preserving
+    # first-seen order (for unsorted) or building the full set (for alphabet/reverse).
+    seen_labels: list = []
+    seen_set: set = set()
+    for r in results:
+        if not r:
+            continue
+        for lbl in r["elem_values"].get(label_slot, []):
+            if lbl and lbl not in seen_set:
+                seen_labels.append(lbl)
+                seen_set.add(lbl)
+
+    if sort_mode == "alphabet":
+        ordered_labels = sorted(seen_labels, key=lambda x: x.lower())
+    elif sort_mode == "reverse":
+        ordered_labels = sorted(seen_labels, key=lambda x: x.lower(), reverse=True)
+    else:
+        ordered_labels = seen_labels  # insertion order
+
+    # ── Build per-snapshot label->value dict ──────────────────────────────────
+    # Align by index: labels[i] maps to values[i] within the same snapshot.
+    snap_maps: list = []   # one dict per result: {label: value}
+    for r in results:
+        if not r:
+            snap_maps.append({})
+            continue
+        lbls = r["elem_values"].get(label_slot, [])
+        vals = r["elem_values"].get(value_slot, [])
+        snap_maps.append({lbls[i]: vals[i] if i < len(vals) else ""
+                          for i in range(len(lbls))})
+
+    # ── Snapshot header values (dates/times) ─────────────────────────────────
+    snap_dates  = [r["date"]  if r else "" for r in results]
+    snap_times  = [r["time"]  if r else "" for r in results]
+    snap_urls   = [r["url"]   if r else "" for r in results]
+    snap_errors = [r["error"] if r else "" for r in results]
+
+    # ── Write output ──────────────────────────────────────────────────────────
+    ref_path = os.path.splitext(output_path)[0] + "_reformatted.csv"
+
+    with open(ref_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+
+        if layout == "rows":
+            # Each row = one label; each column = one snapshot
+            # Row 0:   "date"  + [date per snapshot]
+            # Row 1:   "time"  + [time per snapshot]  (if show_time)
+            # Row 2:   "url"   + [url per snapshot]
+            # Row 3:   "error" + [error per snapshot]
+            # Rows 4+: label rows
+            writer.writerow(["date"] + snap_dates)
+            if show_time:
+                writer.writerow(["time"] + snap_times)
+            writer.writerow(["url"]   + snap_urls)
+            writer.writerow(["error"] + snap_errors)
+            for label in ordered_labels:
+                writer.writerow([label] + [snap_maps[i].get(label, "") for i in range(len(results))])
+
+        else:
+            # columns layout: each column = one label; each row = one snapshot
+            # Header row: "date" | "time"? | "url" | "error" | <labels>
+            header = ["date"]
+            if show_time:
+                header.append("time")
+            header.extend(["url", "error"])
+            header.extend(ordered_labels)
+            writer.writerow(header)
+
+            for i, r in enumerate(results):
+                row = [snap_dates[i]]
+                if show_time:
+                    row.append(snap_times[i])
+                row.extend([snap_urls[i], snap_errors[i]])
+                for label in ordered_labels:
+                    row.append(snap_maps[i].get(label, ""))
+                writer.writerow(row)
+
+    log(f"[Reformat] Saved reformatted CSV -> {os.path.abspath(ref_path)}")
 
 
 # ── Run One Pass Over Snapshot Indices ────────────────────────────────────────
@@ -1025,6 +1214,9 @@ def main():
     log(f"  Threads    : {cfg['threads']}")
     log(f"  CSV layout : {cfg['csv_layout']}  |  result padding: {'yes' if cfg['result_padding'] else 'no'}")
     log(f"  Output     : {cfg['output']}")
+    if cfg["reformat"]:
+        log(f"  Reformat   : yes  |  label elem: {cfg['reformat_label_slot']}  |  "
+            f"value elem: {cfg['reformat_value_slot']}  |  sort: {cfg['reformat_sort']}")
     log("=" * 60)
 
     snapshots = get_snapshots(cfg)
@@ -1047,6 +1239,8 @@ def main():
         drain_buffer()
 
     write_csv(results, cfg, cfg["output"])
+    if cfg["reformat"]:
+        reformat_csv(results, cfg, cfg["output"])
     save_log(cfg["output"])
 
     elapsed = time.time() - start_time

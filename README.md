@@ -19,7 +19,7 @@ Requirements before running (type into command prompt):
 The full URL of the page to track, e.g. `https://www.example.com`
 
 `url_filter`  
-Controls which archived URLs are included in the search (case sensitive).  
+Controls which archived URLs are included in the search (case sensitive). URLs must match at least one filter or will else be skipped.  
 &nbsp; &nbsp; &nbsp;_(blank)_&nbsp; &nbsp; &nbsp; &nbsp; -> match only the exact URL, no variants  
 &nbsp; &nbsp; &nbsp;`*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
 &nbsp; &nbsp; &nbsp;`/subpage` &nbsp; -> include only URLs whose path contains `/subpage`,  
@@ -115,14 +115,10 @@ CSV file name
 
 `csv_layout`  
 &nbsp; &nbsp; &nbsp;`columns` ->  each attribute is a column, each snapshot is a row  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date | time | element | extract | url | error  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date | time | element | url | error  
 &nbsp; &nbsp; &nbsp;`rows` &nbsp; &nbsp; &nbsp;->  each attribute is a row, each snapshot is a column  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date &nbsp; &nbsp;| Jan 1 | Feb 1 | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; elem &nbsp; &nbsp;| value | value | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; extract | alt &nbsp; | alt &nbsp; | ...  
-
-The extract type (e.g. `alt`, `text`, `src`) is always written to the row or
-column immediately after the element's value, as a reminder of what was extracted.
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; date &nbsp;| Jan 1 | Feb 1 | ...   
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; elem | value | value | ... 
 
 `result_padding`  
 Insert blank rows/columns in the CSV file for time periods that had no archived snapshots  
@@ -143,6 +139,32 @@ Show the year in the output CSV? (`yes` / `no`)
 
 `show_time`  
 Show the time in the output CSV? (`yes` / `no`)
+<br>
+<br>
+### REFORMAT
+
+`reformat`    
+(`yes` / `no`)  
+Writes an additional `[filename]_reformatted` CSV alongside the raw output.  
+The reformatted file pairs 2 elements, with one being a label and the other being a value for the label. The reformatting moves each value element into one row (or column) per unique label,  
+e.g. date &nbsp;| Jan 1 | Feb 1 | ... &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;date | Jan 1 | Feb 1 | ...  
+&nbsp; &nbsp; &nbsp; &nbsp;elem | label | &nbsp;label &nbsp;| ...  &nbsp; -> &nbsp;label | value | value | ...  
+&nbsp; &nbsp; &nbsp; &nbsp;elem | value | value | ...  
+label[i] from a snapshot is paired with value[i] from the same snapshot in cases where there are multiple of the same elements.
+
+`reformat_label_element`  
+The element index whose values become the labels in the
+reformatted file, e.g. `2` will treat the `element_2` element as the label.
+
+`reformat_value_element`  
+The element index whose values become the values (the changing data to track
+across snapshots) in the reformatted file, e.g. `3` will treat the `element_3` element as the value to track.
+
+`reformat_sort`  
+How to order the label rows / columns in the reformatted file:  
+&nbsp; &nbsp; &nbsp;`unsorted` -> labels appear in first-seen order  
+&nbsp; &nbsp; &nbsp;`alphabet` -> alphabetical A-Z (case-insensitive)  
+&nbsp; &nbsp; &nbsp;`reverse` &nbsp; -> alphabetical Z-A (case-insensitive)
 <br>
 <br>
 ### ADVANCED
