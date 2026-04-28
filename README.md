@@ -18,26 +18,26 @@ Requirements before running (type into command prompt):
 `url`  
 The full URL of the page to track, e.g. `https://www.example.com`
 
-`url_filter`  
+`filter_any`, `filter_all`  
 Controls which archived URLs are included in the search. URLs must satisfy the filter(s) or will else be skipped.  
+&nbsp; &nbsp; &nbsp;`filter_any` -> URL must match at least one filter  
+&nbsp; &nbsp; &nbsp;`filter_all` -> URL must match every filter
+
+Both fields support the same filter syntax and can be used independently or together.  
 &nbsp; &nbsp; &nbsp;_(blank)_&nbsp; &nbsp; &nbsp; &nbsp; -> match only the exact URL, no variants  
 &nbsp; &nbsp; &nbsp;`*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
 &nbsp; &nbsp; &nbsp;`/subpage` &nbsp; -> include only URLs whose path contains `/subpage`,  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; e.g. `/images` matches `example.com/images` and `example.com/images/search`  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `/images` matches `example.com/images` and `example.com/images/search`  
 &nbsp; &nbsp; &nbsp;`key=value` -> include only URLs where `key=value` is a query parameter,  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; e.g. `example.com?lang=en`  
-&nbsp; &nbsp; &nbsp;`<filter>*` -> substring match, e.g. `key=*` matches both `key=1` and `key=2`, `images*` matches both `/images` and `key=images`  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `example.com?lang=en`  
+&nbsp; &nbsp; &nbsp;`<filter>*` -> substring match  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `key=*` matches both `key=1` and `key=2`, `images*` matches both `/images` and `key=images`  
 &nbsp; &nbsp; &nbsp;`!<filter>` -> exclude instead of include (works with all of the above)  
+
 Multiple filters are separated by spaces, e.g. `/images` `key=value` or `!page=2` `!page=3`
 
 `case_sensitive`  
-Whether filter matching is case sensitive (`yes` / `no`) 
-
-`filter_mode`  
-How multiple filters are combined (`any` / `all`)  
-&nbsp; &nbsp; &nbsp;`any` -> URL must match at least one filter — OR logic (default)  
-&nbsp; &nbsp; &nbsp;`all` -> URL must match every filter  
-Exclusion filters (`!`) are always treated as `any` regardless of this setting.
+Whether filter matching is case sensitive (`yes` / `no`)
 <br>
 <br>
 ### HTML ELEMENTS
@@ -58,12 +58,12 @@ What to extract from the element:
 &nbsp; &nbsp; &nbsp;`placeholder` -> `placeholder="..."` attribute (input hints)  
 &nbsp; &nbsp; &nbsp;`datetime` &nbsp; &nbsp; &nbsp;-> `datetime="..."` attribute (time elements)  
 &nbsp; &nbsp; &nbsp;`action` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> `action="..."` attribute (forms)  
-&nbsp; &nbsp; &nbsp;`data-*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> any custom data attribute, e.g. data-count, data-value  
+&nbsp; &nbsp; &nbsp;`data-*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> any custom data attribute, e.g. `data-count`, `data-value`  
 If a selector matches multiple elements on the page, all of them are captured.
 
-In cases where the element name is vague, enter the parent element and then the target element, e.g. `<div class="paragraph1">` `<span class="paragraph2">text</span>` will target "span.paragraph2" elements that are only inside a "div.paragraph1" element.
+In cases where the element name is vague, enter the parent element and then the target element, e.g. `<div class="paragraph1">` `<span class="paragraph2">text</span>` will target `span.paragraph2` elements that are only inside a `div.paragraph1` element.
 
-To target a specific occurrence of the child element, place a number directly before it, e.g. `<div class="paragraph1">` `2<span class="paragraph2">text</span>` grabs the 2nd span.paragraph2 within div.paragraph1. Placing bare numbers after the parent without a child element boardens the selection to all child elements, e.g. `<div class="paragraph1"> 2 3` simply grabs the 3rd child element of the 2nd child element of "div.paragraph1"
+To target a specific occurrence of the child element, place a number directly before it, e.g. `<div class="paragraph1">` `2<span class="paragraph2">text</span>` grabs the 2nd `span.paragraph2` within `div.paragraph1`. Placing bare numbers after the parent without a child element boardens the selection to all child elements, e.g. `<div class="paragraph1"> 2 3` simply grabs the 3rd child element of the 2nd child element of `div.paragraph1`
 
 Both of these can be combined and stacked freely.
 <br>
@@ -185,7 +185,7 @@ How to order the label rows / columns in the reformatted file:
 Minimum gap between 2 consecutive selected snapshots, as a fraction of the
 frequency period. Snapshots closer together than this are compared and the
 one farther from its anchor is discarded.  
-&nbsp; &nbsp; &nbsp;`0.5` ->  half the period (~15 days for monthly, ~12 hours for daily)  
+&nbsp; &nbsp; &nbsp;`0.5` ->  half the period, e.g. ~15 days for monthly, 12 hours for daily  
 &nbsp; &nbsp; &nbsp;`0`&nbsp; &nbsp; ->  disabled
 
 `delay`  

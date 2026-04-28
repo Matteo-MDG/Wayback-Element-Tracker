@@ -125,34 +125,49 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str,
         return pattern in params
 
 
-def url_matches_filters(url: str, filters: list,
-                        case_sensitive: bool = True,
-                        filter_and_mode: bool = False) -> bool:
+def url_matches_filters(url: str, filters_any: list, filters_all: list,
+                        case_sensitive: bool = True) -> bool:
     """
-    Return True if *url* passes the combined filter list.
+    Return True if *url* passes both filter fields.
 
-    Rules:
-      - Exclude filters (!): URL must not match any of them.
-      - Include filters (no !): URL must match at least one (if any exist),
-        or ALL of them when filter_and_mode=True.
-      - If there are no include filters, any URL that survives exclusion passes.
+    filter_any rules  (OR logic):
+      - Exclude (!): URL must not match any of them.
+      - Include:     URL must match at least one (if any exist).
+
+    filter_all rules  (AND logic):
+      - Exclude (!): URL must not match all of them simultaneously.
+      - Include:     URL must match every one of them (if any exist).
+
+    Both fields must be satisfied for the URL to pass.
     """
-    if not filters:
-        return True
+    cs = case_sensitive
 
-    include_filters = [f for f in filters if not f["negate"]]
-    exclude_filters = [f for f in filters if f["negate"]]
+    # ── filter_any (OR) ───────────────────────────────────────────────────────
+    any_includes = [f for f in filters_any if not f["negate"]]
+    any_excludes = [f for f in filters_any if f["negate"]]
 
-    for f in exclude_filters:
-        if _single_filter_matches(url, f["pattern"], f["mode"], case_sensitive):
+    for f in any_excludes:
+        if _single_filter_matches(url, f["pattern"], f["mode"], cs):
             return False
 
-    if include_filters:
-        if filter_and_mode:
-            return all(_single_filter_matches(url, f["pattern"], f["mode"], case_sensitive)
-                       for f in include_filters)
-        return any(_single_filter_matches(url, f["pattern"], f["mode"], case_sensitive)
-                   for f in include_filters)
+    if any_includes:
+        if not any(_single_filter_matches(url, f["pattern"], f["mode"], cs)
+                   for f in any_includes):
+            return False
+
+    # ── filter_all (AND) ──────────────────────────────────────────────────────
+    all_includes = [f for f in filters_all if not f["negate"]]
+    all_excludes = [f for f in filters_all if f["negate"]]
+
+    if all_excludes:
+        if all(_single_filter_matches(url, f["pattern"], f["mode"], cs)
+               for f in all_excludes):
+            return False
+
+    if all_includes:
+        if not all(_single_filter_matches(url, f["pattern"], f["mode"], cs)
+                   for f in all_includes):
+            return False
 
     return True
 
@@ -487,9 +502,9 @@ def load_settings(path="settings.txt") -> dict:
         "show_time": "yes",
         "csv_layout": "rows",
         "padding": "no",
-        "filter": "",
+        "filter_any": "",
+        "filter_all": "",
         "case_sensitive": "yes",
-        "filter_mode": "any",
         "min_gap": "0.5",
         "delay": "10",
         "retries": "5",
@@ -511,9 +526,9 @@ def load_settings(path="settings.txt") -> dict:
                 continue
             key, _, value = line.partition("=")
             key = key.strip().lower().replace("-", "_")
-            # Accept legacy 'url_variants' as an alias for 'filter'
+            # Accept legacy 'url_variants' as an alias for 'filter_any'
             if key == "url_variants":
-                key = "filter"
+                key = "filter_any"
                 if value.lower() in ("yes", "true", "1"):
                     value = "*"
                 elif value.lower() in ("no", "false", "0"):
@@ -538,7 +553,9 @@ def load_settings(path="settings.txt") -> dict:
 
     min_gap_secs = int(FREQ_SECONDS.get(raw["frequency"], 0) * min_gap_frac)
 
-    cdx_wildcard, filters = parse_filters(raw["filter"])
+    cdx_any, filters_any = parse_filters(raw["filter_any"])
+    cdx_all, filters_all = parse_filters(raw["filter_all"])
+    cdx_wildcard = cdx_any or cdx_all
 
     if not any([yesno(raw["show_month"]), yesno(raw["show_day"]),
                 yesno(raw["show_year"]), yesno(raw["show_time"])]):
@@ -640,11 +657,12 @@ def load_settings(path="settings.txt") -> dict:
         "show_time": yesno(raw["show_time"]),
         "csv_layout": raw["csv_layout"].lower(),
         "padding": yesno(raw["padding"]),
-        "filter_raw": raw["filter"],
+        "filter_any_raw": raw["filter_any"],
+        "filter_all_raw": raw["filter_all"],
         "filter_cdx_wildcard": cdx_wildcard,
-        "filters": filters,
+        "filters_any": filters_any,
+        "filters_all": filters_all,
         "case_sensitive": yesno(raw["case_sensitive"]),
-        "filter_and_mode": raw["filter_mode"].strip().lower() == "all",
         "min_gap_secs": min_gap_secs,
         "min_gap_frac": float(raw["min_gap"]),
         "output": raw["output"],
@@ -689,19 +707,21 @@ def get_snapshots(cfg: dict) -> list:
             log(f"[CDX]    Found {len(snapshots)} unique snapshots.")
 
             # Post-filter by filters when any filters are specified
-            if cfg["filters"]:
+            if cfg["filters_any"] or cfg["filters_all"]:
                 before = len(snapshots)
                 snapshots = [
                     s for s in snapshots
                     if url_matches_filters(
-                        s["original"], cfg["filters"],
+                        s["original"], cfg["filters_any"], cfg["filters_all"],
                         cfg["case_sensitive"],
-                        cfg["filter_and_mode"],
                     )
                 ]
+                any_raw = cfg["filter_any_raw"]
+                all_raw = cfg["filter_all_raw"]
+                raw_display = " | ".join(p for p in [any_raw, all_raw] if p)
                 log(
                     f"[CDX]    {len(snapshots)} of {before} snapshots passed "
-                    f"filter(s): {cfg['filter_raw']!r}."
+                    f"filter(s): {raw_display!r}."
                 )
 
             return snapshots
@@ -1222,15 +1242,18 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.4.1")
+    log("  Wayback Element Tracker v1.4.2")
     log("=" * 60)
-    filter_raw = cfg["filter_raw"]
-    filters = cfg["filters"]
-    if not filter_raw:
-        filter_suffix = ""
-    elif not filters:
-        filter_suffix = " (*)"
-    else:
+    filter_any_raw = cfg["filter_any_raw"]
+    filter_all_raw = cfg["filter_all_raw"]
+    filters_any    = cfg["filters_any"]
+    filters_all    = cfg["filters_all"]
+
+    def _filter_display(filters, raw):
+        if not raw:
+            return ""
+        if not filters:
+            return "(*)"
         parts = []
         for f in filters:
             prefix = "!" if f["negate"] else ""
@@ -1243,9 +1266,21 @@ def main():
             else:
                 label = f"{prefix}{f['pattern']}"
             parts.append(label)
-        mode_tag = "AND" if cfg["filter_and_mode"] else "OR"
-        case_tag = "case-sensitive" if cfg["case_sensitive"] else "case-insensitive"
-        filter_suffix = f" (filter [{mode_tag}, {case_tag}]: {', '.join(parts)})"
+        return ", ".join(parts)
+
+    case_tag = "case-sensitive" if cfg["case_sensitive"] else "case-insensitive"
+    any_display = _filter_display(filters_any, filter_any_raw)
+    all_display = _filter_display(filters_all, filter_all_raw)
+
+    if any_display or all_display:
+        parts = []
+        if any_display:
+            parts.append(f"any=[{any_display}]")
+        if all_display:
+            parts.append(f"all=[{all_display}]")
+        filter_suffix = f" (filter {', '.join(parts)}, {case_tag})"
+    else:
+        filter_suffix = ""
     log(f"  URL        : {cfg['url']}{filter_suffix}")
     for elem in cfg["elements"]:
         log(f"  Element {elem['slot']}  : {elem['selector']}  (extract: {elem['extract']})")
