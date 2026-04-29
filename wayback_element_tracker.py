@@ -1345,7 +1345,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.4.3")
+    log("  Wayback Element Tracker v1.4.4")
     log("=" * 60)
     filter_any_raw = cfg["filter_any_raw"]
     filter_all_raw = cfg["filter_all_raw"]

@@ -33,7 +33,6 @@ Both fields support the same filter syntax and can be used independently or toge
 &nbsp; &nbsp; &nbsp;`<filter>*` -> substring match  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `key=*` matches both `key=1` and `key=2`, `images*` matches both `/images` and `key=images`  
 &nbsp; &nbsp; &nbsp;`!<filter>` -> exclude instead of include (works with all of the above)  
-
 Multiple filters are separated by spaces, e.g. `/images` `key=value` or `!page=2` `!page=3`
 
 `case_sensitive`  
@@ -188,7 +187,7 @@ How to order the label rows / columns in the reformatted file:
 `zero_fill`  
 When a label first appears partway through the timeline, places a `0` before its first value.  
 &nbsp; &nbsp; &nbsp;`no` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> disabled  
-&nbsp; &nbsp; &nbsp;`adjacent` -> places `0` in the CELL immediately before the first value  
+&nbsp; &nbsp; &nbsp;`adjacent` -> places `0` in the cell DIRECTLY before the first value  
 &nbsp; &nbsp; &nbsp;`snapshot` -> places `0` in the SNAPSHOT before the first value (only effective when `padding` enabled)
 
 `fill_first`   
