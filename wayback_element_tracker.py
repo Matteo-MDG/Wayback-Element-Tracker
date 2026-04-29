@@ -472,7 +472,25 @@ def iter_periods(from_dt: datetime, to_dt: datetime, frequency: str):
             current += timedelta(hours=1)
 
 
-# ── Settings Parser ───────────────────────────────────────────────────────────
+def prev_period_dt(dt: datetime, frequency: str) -> datetime:
+    """Return the start of the period immediately preceding dt's period."""
+    if frequency == "yearly":
+        return datetime(dt.year - 1, 1, 1)
+    if frequency == "monthly":
+        return datetime(dt.year - 1, 12, 1) if dt.month == 1 \
+               else datetime(dt.year, dt.month - 1, 1)
+    if frequency == "weekly":
+        week_start = (dt - timedelta(days=dt.weekday())).replace(
+            hour=0, minute=0, second=0, microsecond=0)
+        return week_start - timedelta(weeks=1)
+    if frequency == "daily":
+        return dt.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+    if frequency == "hourly":
+        return dt.replace(minute=0, second=0, microsecond=0) - timedelta(hours=1)
+    return dt
+
+
+
 def yesno(val: str) -> bool:
     return val.strip().lower() == "yes"
 
@@ -486,7 +504,7 @@ def load_settings(path="settings.txt") -> dict:
         "from_date": "",
         "to_date": "",
         "frequency": "monthly",
-        "sample_anchor": "start",
+        "sample_from": "start",
         "convention": "us",
         "date_style": "long",
         "year_digits": "4",
@@ -513,7 +531,9 @@ def load_settings(path="settings.txt") -> dict:
         "reformat": "no",
         "label_elements": "",
         "value_elements": "",
-        "sort": "unsorted",
+        "sort": "alphabet",
+        "zero_fill": "no",
+        "fill_first": "no",
         **{f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)},
         **{f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)},
     }
@@ -652,13 +672,13 @@ def load_settings(path="settings.txt") -> dict:
     except ValueError:
         sys.exit("[Error] 'threads' must be a positive integer.")
 
-    return {
+    cfg = {
         "url": url,
         "elements": elements,
         "from_date": raw["from_date"],
         "to_date": raw["to_date"],
         "frequency": raw["frequency"],
-        "sample_anchor": raw["sample_anchor"].lower(),
+        "sample_from": raw["sample_from"].lower(),
         "convention": raw["convention"].lower(),
         "date_style": raw["date_style"].lower(),
         "year_digits": int(raw["year_digits"]),
@@ -689,7 +709,13 @@ def load_settings(path="settings.txt") -> dict:
         "reformat": do_reformat,
         "reformat_pairs": reformat_pairs,
         "sort": sort,
+        "zero_fill": raw["zero_fill"].strip().lower(),
+        "fill_first": yesno(raw["fill_first"]),
     }
+
+    if cfg["zero_fill"] not in ("no", "adjacent", "snapshot"):
+        sys.exit("[Error] 'zero_fill' must be 'no', 'adjacent', or 'snapshot'.")
+    return cfg
 
 
 # ── Step 1: Get Snapshot List ─────────────────────────────────────────────────
@@ -750,7 +776,7 @@ def get_snapshots(cfg: dict) -> list:
 # ── Step 2: Sampling ──────────────────────────────────────────────────────────
 def sample_snapshots(snapshots: list, cfg: dict) -> list:
     frequency = cfg["frequency"]
-    anchor = cfg["sample_anchor"]
+    anchor = cfg["sample_from"]
     min_gap_secs = cfg["min_gap_secs"]
     freq_fmt = FREQ_MAP.get(frequency)
     base_url = cfg["url"]
@@ -970,7 +996,7 @@ def apply_padding(results: list, cfg: dict) -> list:
         if key in bucket_map:
             padded.append(bucket_map[key])
         else:
-            anchor_dt = anchor_dt_for(period_dt, frequency, cfg["sample_anchor"])
+            anchor_dt = anchor_dt_for(period_dt, frequency, cfg["sample_from"])
             date_str, time_str = format_datetime(anchor_dt, cfg)
             padded.append({
                 "timestamp": "",
@@ -1097,10 +1123,12 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
         log("[Reformat] No results to reformat.")
         return
 
-    pairs      = cfg["reformat_pairs"]
-    layout     = cfg["csv_layout"]
-    sort_mode  = cfg["sort"]
-    show_time  = cfg["show_time"]
+    pairs           = cfg["reformat_pairs"]
+    layout          = cfg["csv_layout"]
+    sort_mode       = cfg["sort"]
+    show_time       = cfg["show_time"]
+    zero_fill       = cfg["zero_fill"]
+    fill_first      = cfg["fill_first"]
 
     results = apply_padding(results, cfg)
 
@@ -1171,6 +1199,57 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
     snap_urls   = [r["url"]   if r else "" for r in results]
     snap_errors = [r["error"] if r else "" for r in results]
 
+    # ── Zero-fill pre-processing ──────────────────────────────────────────────
+    # For each label, compute which column index gets "0":
+    #   None  -> no zero for this label
+    #   >= 0  -> replace that column's value with "0"
+    #   -1    -> needs a new column prepended (fill_first case)
+    zero_cols: dict = {}
+    if zero_fill != "no":
+        for ordered_labels, snap_maps in pair_data:
+            for label in ordered_labels:
+                first = next((i for i, m in enumerate(snap_maps) if m.get(label)), None)
+                if first is None:
+                    zero_cols[label] = None
+                elif first == 0:
+                    zero_cols[label] = -1 if fill_first else None
+                else:
+                    if zero_fill == "snapshot":
+                        # Put "0" in the last real (non-padded) snapshot before first
+                        real_before = next(
+                            (i for i in range(first - 1, -1, -1)
+                             if results[i] and results[i].get("timestamp")),
+                            None
+                        )
+                        zero_cols[label] = real_before if real_before is not None else first - 1
+                    else:
+                        # adjacent: put "0" in the period cell immediately before first
+                        zero_cols[label] = first - 1
+
+        # If any label needs column -1, prepend a synthetic column for the
+        # period immediately before the dataset starts.
+        if any(v == -1 for v in zero_cols.values()):
+            first_real = next((r for r in results if r and r.get("timestamp")), None)
+            if first_real:
+                prev_dt = prev_period_dt(ts_to_dt(first_real["timestamp"]), cfg["frequency"])
+                prev_date, prev_time = format_datetime(prev_dt, cfg)
+            else:
+                prev_date, prev_time = "", ""
+
+            snap_dates  = [prev_date] + snap_dates
+            snap_times  = [prev_time] + snap_times
+            snap_urls   = [""] + snap_urls
+            snap_errors = [""] + snap_errors
+            # Shift snap_maps: prepend empty entry so column indices stay aligned
+            pair_data = [(ol, [{}] + sm) for ol, sm in pair_data]
+            # -1 -> 0; all other non-None values shift up by 1
+            zero_cols = {
+                lbl: (0 if v == -1 else v + 1 if v is not None else None)
+                for lbl, v in zero_cols.items()
+            }
+
+    n = len(snap_dates)
+
     # ── Write output ──────────────────────────────────────────────────────────
     ref_path = os.path.splitext(output_path)[0] + "_reformatted.csv"
 
@@ -1185,10 +1264,14 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
             writer.writerow(["error"] + snap_errors)
             for ordered_labels, snap_maps in pair_data:
                 for label in ordered_labels:
-                    writer.writerow([label] + [snap_maps[i].get(label, "") for i in range(len(results))])
+                    row = [snap_maps[i].get(label, "") for i in range(n)]
+                    if zero_fill != "no":
+                        zc = zero_cols.get(label)
+                        if zc is not None:
+                            row[zc] = "0"
+                    writer.writerow([label] + row)
 
         else:
-            # Build header: date | time? | url | error | all labels across all pairs
             header = ["date"]
             if show_time:
                 header.append("time")
@@ -1197,14 +1280,18 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
                 header.extend(ordered_labels)
             writer.writerow(header)
 
-            for i, r in enumerate(results):
+            for i in range(n):
                 row = [snap_dates[i]]
                 if show_time:
                     row.append(snap_times[i])
                 row.extend([snap_urls[i], snap_errors[i]])
                 for ordered_labels, snap_maps in pair_data:
                     for label in ordered_labels:
-                        row.append(snap_maps[i].get(label, ""))
+                        zc = zero_cols.get(label) if zero_fill != "no" else None
+                        if zc is not None and i == zc:
+                            row.append("0")
+                        else:
+                            row.append(snap_maps[i].get(label, ""))
                 writer.writerow(row)
 
     log(f"[Reformat] Saved reformatted CSV -> {os.path.abspath(ref_path)}")
@@ -1301,7 +1388,7 @@ def main():
     for elem in cfg["elements"]:
         log(f"  Element {elem['slot']}  : {elem['selector']}  (extract: {elem['extract']})")
     log(f"  Date range : {cfg['from_date'] or 'start'} -> {cfg['to_date'] or 'now'}")
-    log(f"  Frequency  : {cfg['frequency']}  |  anchor: {cfg['sample_anchor']}  |  min gap: {gap_info}")
+    log(f"  Frequency  : {cfg['frequency']}  |  anchor: {cfg['sample_from']}  |  min gap: {gap_info}")
     log(f"  Format     : {sample_str}")
     log(f"  Threads    : {cfg['threads']}")
     log(f"  CSV layout : {cfg['csv_layout']}  |  result padding: {'yes' if cfg['padding'] else 'no'}")

@@ -20,8 +20,8 @@ The full URL of the page to track, e.g. `https://www.example.com`
 
 `filter_any`, `filter_all`  
 Controls which archived URLs are included in the search. URLs must satisfy the filter(s) or will else be skipped.  
-&nbsp; &nbsp; &nbsp;`filter_any` -> URL must match at least one filter  
-&nbsp; &nbsp; &nbsp;`filter_all` -> URL must match every filter
+&nbsp; &nbsp; &nbsp;`filter_any` -> URL must match at least ONE filter  
+&nbsp; &nbsp; &nbsp;`filter_all` -> URL must match EVERY filter
 
 Both fields support the same filter syntax and can be used independently or together.  
 &nbsp; &nbsp; &nbsp;*(blank)*&nbsp; &nbsp; &nbsp; &nbsp; -> match only the exact URL, no variants  
@@ -85,7 +85,7 @@ Format: `YYYYMMDD`. Leave blank to search all available snapshots.
 Frequency of snapshots to check:  
 &nbsp; &nbsp; &nbsp;`all` / `hourly` / `daily` / `weekly` / `monthly` / `yearly`
 
-`sample_anchor`  
+`sample_from`  
 Which snapshot to pick within each frequency period:  
 &nbsp; &nbsp; &nbsp;`start` ->  the snapshot closest to the START of the period  
 &nbsp; &nbsp; &nbsp;`end` &nbsp; &nbsp;->  the snapshot closest to the END of the period
@@ -161,8 +161,7 @@ Show the time in the output CSV? (`yes` / `no`)
 ### REFORMAT
 
 `reformat`    
-(`yes` / `no`)  
-Writes an additional `[filename]_reformatted` CSV alongside the raw output.  
+Writes an additional `[filename]_reformatted` CSV alongside the raw output. (`yes` / `no`)   
 The reformatted file pairs 2 elements, with one being a label and the other being a value for the label. The reformatting moves each value element into one row (or column) per unique label,  
 e.g. `date` | `Jan 1` | `Feb 1` | ... &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `Jan 1` | `Feb 1` | ...  
 &nbsp; &nbsp; &nbsp; &nbsp;`elem` | `label` | `label` | ...  &nbsp; -> &nbsp;`label` | `value` | `value` | ...  
@@ -170,11 +169,11 @@ e.g. `date` | `Jan 1` | `Feb 1` | ... &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` 
 In cases where there are multiple of the same elements, the label index from a snapshot is paired with value index from the same snapshot.
 
 `label_elements`  
-The index of the element(s) whose output become the labels in the reformatted file,  
+The index of the element(s) whose output become the LABELS in the reformatted file,  
 e.g. `2` will treat the `element_2` element as the label.
 
 `value_elements`  
-The index of the element(s) whose output become the values (the changing data across snapshots) in the reformatted file,  
+The index of the element(s) whose output become the VALUES (the changing data across snapshots) in the reformatted file,  
 e.g. `3` will treat the `element_3` element as the value to track
 
 For both fields, multiple indexes can be entered, separated by spaces. The index of the label element will be paired with the index of the value element,  
@@ -185,6 +184,15 @@ How to order the label rows / columns in the reformatted file:
 &nbsp; &nbsp; &nbsp;`unsorted` -> labels appear in first-seen order  
 &nbsp; &nbsp; &nbsp;`alphabet` -> alphabetical A-Z (case-insensitive)  
 &nbsp; &nbsp; &nbsp;`reverse` &nbsp; -> alphabetical Z-A (case-insensitive)
+
+`zero_fill`  
+When a label first appears partway through the timeline, places a `0` before its first value.  
+&nbsp; &nbsp; &nbsp;`no` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> disabled  
+&nbsp; &nbsp; &nbsp;`adjacent` -> places `0` in the CELL immediately before the first value  
+&nbsp; &nbsp; &nbsp;`snapshot` -> places `0` in the SNAPSHOT before the first value (only effective when `padding` enabled)
+
+`fill_first`   
+Also place a `0` before labels whose first value appears at the very start of the timeline. (`yes` / `no`) 
 <br>
 <br>
 ### ADVANCED
