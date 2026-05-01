@@ -16,27 +16,35 @@ Requirements before running (type into command prompt):
 ### URL
 
 `url`  
-The full URL of the page to track, e.g. `https://www.example.com`
+The full URL of the page to track, e.g. `https://www.example.com`  
 
 `filter_any`, `filter_all`  
-Controls which archived URLs are included in the search. URLs must satisfy the filter(s) or will else be skipped.  
+Controls which archived URL variants are included. URLs must satisfy the filter(s) or will be skipped.  
 &nbsp; &nbsp; &nbsp;`filter_any` -> URL must match at least ONE filter  
 &nbsp; &nbsp; &nbsp;`filter_all` -> URL must match EVERY filter
 
 Both fields support the same filter syntax and can be used independently or together.  
 &nbsp; &nbsp; &nbsp;*(blank)*&nbsp; &nbsp; &nbsp; &nbsp; -> match only the exact URL, no variants  
 &nbsp; &nbsp; &nbsp;`*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> include all URL variants  
-&nbsp; &nbsp; &nbsp;`/subpage` &nbsp; -> include only URLs whose path contains `/subpage`,  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `/images` matches `example.com/images` and `example.com/images/search`  
-&nbsp; &nbsp; &nbsp;`key=value` -> include only URLs where `key=value` is a query parameter,  
+&nbsp; &nbsp; &nbsp;`/subpage` &nbsp; -> match URLs where `/subpage` appears at the end of the path,  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `example.com/subpage`  
+&nbsp; &nbsp; &nbsp;`key=value` -> match only URLs containing `key=value` as a query parameter  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `example.com?lang=en`  
-&nbsp; &nbsp; &nbsp;`<filter>*` -> substring match  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `key=*` matches both `key=1` and `key=2`, `images*` matches both `/images` and `key=images`  
-&nbsp; &nbsp; &nbsp;`!<filter>` -> exclude instead of include (works with all of the above)  
-Multiple filters are separated by spaces, e.g. `/images` `key=value` or `!page=2` `!page=3`
+&nbsp; &nbsp; &nbsp;`[filter]*` -> substring match anywhere in the URL,  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;e.g. `key=*` matches both `key=1` and `key=2`,  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;`/subpage*` matches `example.com/subpage-a` and `example.com/subpage-b`  
+&nbsp; &nbsp; &nbsp;`![filter]` -> exclude instead of include. Using only exclude filters will fetch all URL variants  
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;(works with all of the above)  
+Multiple filters are separated by spaces, e.g. `/images` `key=value` `!page=2`
 
 `case_sensitive`  
 Whether filter matching is case sensitive (`yes` / `no`)
+
+`match_child_paths`  
+Whether url path filters (e.g. `/subpage`) also match child pages deeper in the url.  
+&nbsp; &nbsp; &nbsp;`yes` -> `/subpage` also matches `example.com/subpage/child`, `example.com/subpage/child/page`, etc.  
+&nbsp; &nbsp; &nbsp;`no` &nbsp; -> `/subpage` matches only `example.com/subpage` exactly  
+Note: substring filters like `/subpage*` always match child paths regardless of this setting.
 <br>
 <br>
 ### HTML ELEMENTS
@@ -58,7 +66,7 @@ What to extract from the element:
 &nbsp; &nbsp; &nbsp;`datetime` &nbsp; &nbsp; &nbsp;-> `datetime="..."` attribute (time elements)  
 &nbsp; &nbsp; &nbsp;`action` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> `action="..."` attribute (forms)  
 &nbsp; &nbsp; &nbsp;`data-*` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> any custom data attribute, e.g. `data-count`, `data-value`  
-If a selector matches multiple elements on the page, all of them are captured.
+If a selector matches multiple elements on the page, all of them are captured. In the CSV they appear as separately numbered columns or rows, e.g. `selector [1] (text)`, `selector [2] (text)`, etc.
 
 A parent element can be entered before the target element, separated by spaces,  
 e.g. `<div class="paragraph1">` `<span class="paragraph2">text</span>` will target `span.paragraph2` elements that are only inside a `div.paragraph1` element.
@@ -66,7 +74,7 @@ e.g. `<div class="paragraph1">` `<span class="paragraph2">text</span>` will targ
 To target a specific occurrence of the child element, place a number directly before it,  
 e.g. `<div class="paragraph1">` `2<span class="paragraph2">text</span>` grabs the 2nd `span.paragraph2` within `div.paragraph1`.  
 
-Placing bare numbers after the parent without a child element boardens the selection to all child elements,  
+Placing bare numbers after the parent without a child element broadens the selection to all child elements,  
 e.g. `<div class="paragraph1"> 2 3` simply grabs the 3rd child element of the 2nd child element of `div.paragraph1`
 
 All of these can be combined and stacked freely.
@@ -82,12 +90,14 @@ Format: `YYYYMMDD`. Leave blank to search all available snapshots.
 
 `frequency`  
 Frequency of snapshots to check:  
-&nbsp; &nbsp; &nbsp;`all` / `hourly` / `daily` / `weekly` / `monthly` / `yearly`
+&nbsp; &nbsp; &nbsp;`all` / `hourly` / `daily` / `weekly` / `monthly` / `yearly`  
 
 `sample_from`  
 Which snapshot to pick within each frequency period:  
-&nbsp; &nbsp; &nbsp;`start` ->  the snapshot closest to the START of the period  
-&nbsp; &nbsp; &nbsp;`end` &nbsp; &nbsp;->  the snapshot closest to the END of the period
+&nbsp; &nbsp; &nbsp;`start` &nbsp; ->  the snapshot closest to the START of the period  
+&nbsp; &nbsp; &nbsp;`middle` -> the snapshot closest to the MIDDLE of the period  
+&nbsp; &nbsp; &nbsp;`end` &nbsp; &nbsp; &nbsp;->  the snapshot closest to the END of the period  
+Has no effect when `frequency = all`.
 <br>
 <br>
 ### DATE & TIME FORMAT
@@ -122,19 +132,25 @@ Show seconds in the time? (`yes` / `no`)
 <br>
 <br>
 ### OUTPUT
+After each run, a `.log` file is saved alongside the CSV with the same base name (e.g. `wayback_results.log`). Each new program execution is added to the end of the log file, which will track the output up to the last 10 runs.  
 
 `output`  
 CSV file name
 
 `file_override`  
-Whether to overwrite the output file if it already exists (`yes` / `no`)
+Whether to overwrite the output file(s) if it already exists (`yes` / `no`)  
+If `no`, an incrementing counter is added instead,  
+e.g `wayback_results.csv` -> `wayback_results_1.csv` -> `wayback_results_2.csv` -> ...
 
 `csv_layout`  
 &nbsp; &nbsp; &nbsp;`columns` ->  each attribute is a column, each snapshot is a row  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `time` | `element` | `url` | `error`  
 &nbsp; &nbsp; &nbsp;`rows` &nbsp; &nbsp; &nbsp;->  each attribute is a row, each snapshot is a column  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `Jan 1` | `Feb 1` | ...   
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `elem` | `value` | `value` | ... 
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `elem` | `value` | `value` | ...
+
+The `url` column contains the full Wayback Machine URL of each snapshot URL.  
+The `error` column is blank on success, or contains the failure reason (e.g. `timeout`, `HTTP 404`). 
 
 `padding`  
 Insert blank rows/columns in the CSV file for time periods that had no archived snapshots  
@@ -142,8 +158,20 @@ Insert blank rows/columns in the CSV file for time periods that had no archived 
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;`value` | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;| `value `| ...  
 
 &nbsp; &nbsp; &nbsp;`no` &nbsp; -> `Jan 1` | `Mar 1` | ...  
-&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;`value` | `value` | ...
+&nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;`value` | `value` | ...  
+Has no effect when `frequency = all`.
 
+`split_output`  
+Write a separate output file per URL filter group instead of one combined file (`yes` / `no`)  
+When enabled, `filter_any` follows this structure:  
+&nbsp; &nbsp; &nbsp;filters such as `/subpage`, `sort=new` have all matching variants merged into their respective files  
+&nbsp; &nbsp; &nbsp;substring filters (e.g. `/subpage*`, `*`) have one file per distinct URL matched by that filter  
+
+When enabled, if `filter_all` contains substring filters, those also have one file per distinct URL. `filter_all` is not used in cases such as `/subpage` `sort=new` since its  logic means every result already matched both filters.
+
+When neither has only `!` filters, the split falls back to one file per distinct URL.
+<br>
+<br>
 `show_month`  
 Show the month in the output CSV? (`yes` / `no`)
 
@@ -159,8 +187,8 @@ Show the time in the output CSV? (`yes` / `no`)
 <br>
 ### REFORMAT
 
-`reformat`    
-Writes an additional `[filename]_reformatted` CSV alongside the raw output. (`yes` / `no`)   
+`reformat`  
+Writes an additional `[filename]_reformatted` CSV per raw output file alongside. (`yes` / `no`)  
 The reformatted file pairs 2 elements, with one being a label and the other being a value for the label. The reformatting moves each value element into one row (or column) per unique label,  
 e.g. `date` | `Jan 1` | `Feb 1` | ... &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `Jan 1` | `Feb 1` | ...  
 &nbsp; &nbsp; &nbsp; &nbsp;`elem` | `label` | `label` | ...  &nbsp; -> &nbsp;`label` | `value` | `value` | ...  
@@ -201,16 +229,18 @@ Minimum gap between 2 consecutive selected snapshots, as a fraction of the
 frequency period. Snapshots closer together than this are compared and the
 one farther from its anchor is discarded.  
 &nbsp; &nbsp; &nbsp;`0.5` ->  half the period, e.g. ~15 days for monthly, 12 hours for daily  
-&nbsp; &nbsp; &nbsp;`0`&nbsp; &nbsp; ->  disabled
+&nbsp; &nbsp; &nbsp;`0`&nbsp; &nbsp; ->  disabled  
+Has no effect when `frequency = all`.
 
 `delay`  
 Seconds to wait between retry attempts and between CDX query retries.
 
 `retries`  
-How many times to retry a failing snapshot or CDX query before giving up.
+How many times to retry a failing snapshot or CDX query before giving up.  
+Note: HTTP 404 and 403 responses are not retried, they fail immediately.
 
 `end_passes`  
-How many times to go back at the end of the script and retry all snapshots that failed.
+How many times to retry all snapshots that failed at the end of the script.
 
 `threads`  
 Number of parallel threads for fetching snapshots.

@@ -50,12 +50,17 @@ def parse_filters(val: str) -> tuple:
       cdx_wildcard : bool  – whether to append '*' to the URL in the CDX query
       filters      : list  – list of filter dicts, each with keys:
                                pattern : str | None
-                               mode    : 'exact' | 'contains' | 'all'
+                               mode    : 'all' | 'path' | 'path_prefix' |
+                                         'contains' | 'exact'
                                negate  : bool  (True when prefixed with '!')
 
     Token syntax:
       (blank)      – exact URL only, no variants fetched, no post-filtering
-      *            – all variants, no post-filtering (include-all)
+      *            – all variants (include-all)
+      /subpage     – path segment-boundary match; the pattern must appear as a
+                     complete path segment (followed by '/' or end of path)
+      /subpage*    – path prefix match; matches any URL whose path contains
+                     the pattern as a prefix or substring
       key=value    – exact query-string parameter match
       key=value*   – substring match anywhere in the URL
       !<token>     – same as above but *excludes* matching URLs instead
@@ -83,7 +88,13 @@ def parse_filters(val: str) -> tuple:
             filters.append({"pattern": None, "mode": "all", "negate": negate})
         elif t.startswith("/"):
             cdx_wildcard = True
-            filters.append({"pattern": t, "mode": "path", "negate": negate})
+            if t.endswith("*"):
+                # /subpage* → path prefix match (strip the *)
+                filters.append({"pattern": t[:-1].rstrip("/"), "mode": "path_prefix", "negate": negate})
+            else:
+                # /subpage or /subpage/ → segment-boundary match
+                # Normalise trailing slash so both forms behave identically
+                filters.append({"pattern": t.rstrip("/") or "/", "mode": "path", "negate": negate})
         elif t.endswith("*"):
             cdx_wildcard = True
             filters.append({"pattern": t[:-1], "mode": "contains", "negate": negate})
@@ -95,7 +106,8 @@ def parse_filters(val: str) -> tuple:
 
 
 def _single_filter_matches(url: str, pattern: str | None, mode: str,
-                           case_sensitive: bool = True) -> bool:
+                           case_sensitive: bool = True,
+                           match_child_paths: bool = True) -> bool:
     """Return True if url matches one filter rule (ignoring negate)."""
     if mode == "all":
         return True
@@ -103,6 +115,21 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str,
         url = url.lower()
         pattern = pattern.lower()
     if mode == "path":
+        # Segment-boundary match: pattern must appear as a complete path segment.
+        # With match_child_paths=True:  also matches deeper children (/a matches /a/b/c)
+        # With match_child_paths=False: only matches the exact end of the path
+        from urllib.parse import urlparse
+        path = urlparse(url).path
+        idx = path.find(pattern)
+        if idx == -1:
+            return False
+        end = idx + len(pattern)
+        if match_child_paths:
+            return end == len(path) or path[end] == "/"
+        else:
+            return end == len(path)
+    if mode == "path_prefix":
+        # Prefix/substring match within the path only.
         from urllib.parse import urlparse
         return pattern in urlparse(url).path
     if mode == "contains":
@@ -126,7 +153,8 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str,
 
 
 def url_matches_filters(url: str, filters_any: list, filters_all: list,
-                        case_sensitive: bool = True) -> bool:
+                        case_sensitive: bool = True,
+                        match_child_paths: bool = True) -> bool:
     """
     Return True if *url* passes both filter fields.
 
@@ -141,17 +169,18 @@ def url_matches_filters(url: str, filters_any: list, filters_all: list,
     Both fields must be satisfied for the URL to pass.
     """
     cs = case_sensitive
+    isp = match_child_paths
 
     # ── filter_any (OR) ───────────────────────────────────────────────────────
     any_includes = [f for f in filters_any if not f["negate"]]
     any_excludes = [f for f in filters_any if f["negate"]]
 
     for f in any_excludes:
-        if _single_filter_matches(url, f["pattern"], f["mode"], cs):
+        if _single_filter_matches(url, f["pattern"], f["mode"], cs, isp):
             return False
 
     if any_includes:
-        if not any(_single_filter_matches(url, f["pattern"], f["mode"], cs)
+        if not any(_single_filter_matches(url, f["pattern"], f["mode"], cs, isp)
                    for f in any_includes):
             return False
 
@@ -160,12 +189,12 @@ def url_matches_filters(url: str, filters_any: list, filters_all: list,
     all_excludes = [f for f in filters_all if f["negate"]]
 
     if all_excludes:
-        if all(_single_filter_matches(url, f["pattern"], f["mode"], cs)
+        if all(_single_filter_matches(url, f["pattern"], f["mode"], cs, isp)
                for f in all_excludes):
             return False
 
     if all_includes:
-        if not all(_single_filter_matches(url, f["pattern"], f["mode"], cs)
+        if not all(_single_filter_matches(url, f["pattern"], f["mode"], cs, isp)
                    for f in all_includes):
             return False
 
@@ -214,9 +243,24 @@ def drain_buffer():
 
 def save_log(output_path: str):
     log_path = os.path.splitext(output_path)[0] + ".log"
+    MAX_RUNS = 10
     try:
+        # Read existing runs from the log file (runs are separated by blank lines)
+        existing_runs = []
+        if os.path.exists(log_path) and os.path.getsize(log_path) > 0:
+            with open(log_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            # Split on blank lines; filter out any empty strings from splitting
+            existing_runs = [r for r in content.split("\n\n") if r.strip()]
+
+        # Add the current run and keep only the last MAX_RUNS runs
+        current_run = "\n".join(_log_lines)
+        all_runs = existing_runs + [current_run]
+        all_runs = all_runs[-MAX_RUNS:]
+
         with open(log_path, "w", encoding="utf-8") as f:
-            f.write("\n".join(_log_lines))
+            f.write("\n\n".join(all_runs))
+            f.write("\n")
         print(f"[Log]    Saved -> {os.path.abspath(log_path)}")
     except Exception as e:
         print(f"[Warning] Could not save log: {e}")
@@ -257,10 +301,10 @@ def parse_element_html(raw: str, slot: int) -> tuple:
     Supported formats:
 
     Single element:
-        element_1 = <img class="card-img" alt="Cannon Cart" src="...">
+        element_1 = <img class="hero-img" alt="Example Title" src="...">
 
     Parent > child chain (space between closing and opening tag):
-        element_1 = <div class="card-row"> <span class="value">5%</span>
+        element_1 = <div class="data-row"> <span class="value">5%</span>
         element_1 = <table class="stats"> <tbody> <tr> <td class="pct">
 
     Nth match of a child selector (integer directly before child tag):
@@ -414,6 +458,10 @@ def ts_to_dt(timestamp: str) -> datetime:
 
 # ── Anchor Point Calculation ──────────────────────────────────────────────────
 def anchor_dt_for(dt: datetime, frequency: str, anchor: str) -> datetime:
+    if anchor == "middle":
+        start = anchor_dt_for(dt, frequency, "start")
+        end   = anchor_dt_for(dt, frequency, "end")
+        return start + (end - start) / 2
     if frequency == "yearly":
         return datetime(dt.year, 1, 1) if anchor == "start" \
             else datetime(dt.year, 12, 31, 23, 59, 59)
@@ -534,6 +582,8 @@ def load_settings(path="settings.txt") -> dict:
         "sort": "alphabet",
         "zero_fill": "no",
         "fill_first": "no",
+        "split_output": "no",
+        "match_child_paths": "no",
         **{f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)},
         **{f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)},
     }
@@ -546,6 +596,7 @@ def load_settings(path="settings.txt") -> dict:
                 continue
             key, _, value = line.partition("=")
             key = key.strip().lower().replace("-", "_")
+            
             # Accept legacy 'url_variants' as an alias for 'filter_any'
             if key == "url_variants":
                 key = "filter_any"
@@ -553,6 +604,12 @@ def load_settings(path="settings.txt") -> dict:
                     value = "*"
                 elif value.lower() in ("no", "false", "0"):
                     value = ""
+            
+            # Accept legacy 'split_by' as an alias for 'split_output'
+            if key == "split_by":
+                value = "yes" if value.strip().lower() in ("url", "filter", "both") else value
+                key = "split_output"
+            
             value = value.strip()
             if key in raw and value:
                 raw[key] = value
@@ -572,8 +629,16 @@ def load_settings(path="settings.txt") -> dict:
         raw["_url_wildcard"] = "no"
     if raw["frequency"] not in FREQ_MAP:
         sys.exit(f"[Error] 'frequency' must be one of: {', '.join(FREQ_MAP)}")
+    if raw["sample_from"].lower() not in ("start", "middle", "end"):
+        sys.exit("[Error] 'sample_from' must be 'start', 'middle', or 'end'")
     if raw["csv_layout"].lower() not in ("columns", "rows"):
         sys.exit("[Error] 'csv_layout' must be 'columns' or 'rows'")
+    if raw["year_digits"] not in ("2", "4"):
+        sys.exit("[Error] 'year_digits' must be '2' or '4'")
+    for field in ("from_date", "to_date"):
+        val = raw[field]
+        if val and (not val.isdigit() or len(val) != 8):
+            sys.exit(f"[Error] '{field}' must be in YYYYMMDD format (e.g. 20231105), got: {val!r}")
 
     try:
         min_gap_frac = float(raw["min_gap"])
@@ -711,6 +776,8 @@ def load_settings(path="settings.txt") -> dict:
         "sort": sort,
         "zero_fill": raw["zero_fill"].strip().lower(),
         "fill_first": yesno(raw["fill_first"]),
+        "split_output": yesno(raw["split_output"]),
+        "match_child_paths": yesno(raw["match_child_paths"]),
     }
 
     if cfg["zero_fill"] not in ("no", "adjacent", "snapshot"):
@@ -753,7 +820,7 @@ def get_snapshots(cfg: dict) -> list:
                     s for s in snapshots
                     if url_matches_filters(
                         s["original"], cfg["filters_any"], cfg["filters_all"],
-                        cfg["case_sensitive"],
+                        cfg["case_sensitive"], cfg["match_child_paths"],
                     )
                 ]
                 any_raw = cfg["filter_any_raw"]
@@ -774,29 +841,45 @@ def get_snapshots(cfg: dict) -> list:
 
 
 # ── Step 2: Sampling ──────────────────────────────────────────────────────────
-def sample_snapshots(snapshots: list, cfg: dict) -> list:
-    frequency = cfg["frequency"]
-    anchor = cfg["sample_from"]
+def _sample_group(snapshots: list, cfg: dict,
+                  prefer_canonical: bool = True) -> tuple:
+    """
+    Sample one flat list of snapshots according to frequency/anchor/min_gap.
+    Returns (sampled, discarded_timestamps).
+
+    prefer_canonical=True  – within a time bucket, the base URL is preferred
+                             over variants as a tiebreaker (single-file mode).
+    prefer_canonical=False – pure time-distance tiebreaker only (per-URL mode,
+                             where all snapshots already share the same URL).
+    """
+    frequency   = cfg["frequency"]
+    anchor      = cfg["sample_from"]
     min_gap_secs = cfg["min_gap_secs"]
-    freq_fmt = FREQ_MAP.get(frequency)
-    base_url = cfg["url"]
+    freq_fmt    = FREQ_MAP.get(frequency)
+    base_url    = cfg["url"]
 
-    def snap_sort_key(s, target):
-        """Sort key: canonical URL first (0), then time distance to target."""
-        is_variant = 0 if s["original"] == base_url else 1
+    def sort_key(s, target):
         time_dist = abs((ts_to_dt(s["timestamp"]) - target).total_seconds())
-        return (is_variant, time_dist)
+        if prefer_canonical:
+            is_variant = 0 if s["original"] == base_url else 1
+            return (is_variant, time_dist)
+        return time_dist
 
+    # frequency = "all": no bucketing, just min_gap filtering
     if freq_fmt is None:
         if min_gap_secs == 0:
-            return snapshots
+            return snapshots, []
         kept = [snapshots[0]]
+        discarded = []
         for snap in snapshots[1:]:
-            if abs((ts_to_dt(snap["timestamp"]) - 
+            if abs((ts_to_dt(snap["timestamp"]) -
                     ts_to_dt(kept[-1]["timestamp"])).total_seconds()) >= min_gap_secs:
                 kept.append(snap)
-        return kept
+            else:
+                discarded.append(snap["timestamp"])
+        return kept, discarded
 
+    # Bucket by period, pick best per bucket
     buckets: dict = {}
     for snap in snapshots:
         bucket = ts_to_dt(snap["timestamp"]).strftime(freq_fmt)
@@ -807,14 +890,13 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
         group = buckets[bucket]
         ref_dt = ts_to_dt(group[0]["timestamp"])
         target = anchor_dt_for(ref_dt, frequency, anchor)
-        best = min(group, key=lambda s: snap_sort_key(s, target))
+        best = min(group, key=lambda s: sort_key(s, target))
         sampled.append(best)
 
-    log(f"[Sample] '{frequency}' ({anchor}) -> {len(sampled)} snapshots selected.")
-
+    # Min-gap pass
+    discarded = []
     if min_gap_secs > 0 and len(sampled) > 1:
         kept = [sampled[0]]
-        discarded_dates = []
         for snap in sampled[1:]:
             prev_dt = ts_to_dt(kept[-1]["timestamp"])
             curr_dt = ts_to_dt(snap["timestamp"])
@@ -824,40 +906,81 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
             else:
                 prev_anchor = anchor_dt_for(prev_dt, frequency, anchor)
                 curr_anchor = anchor_dt_for(curr_dt, frequency, anchor)
-                prev_is_variant = kept[-1]["original"] != base_url
-                curr_is_variant = snap["original"] != base_url
-                prev_dist = abs((prev_dt - prev_anchor).total_seconds())
+                prev_dist = abs((ts_to_dt(kept[-1]["timestamp"]) - prev_anchor).total_seconds())
                 curr_dist = abs((curr_dt - curr_anchor).total_seconds())
-                # Prefer canonical URL first; use time distance as tiebreaker
-                curr_better = (prev_is_variant, prev_dist) > (curr_is_variant, curr_dist)
+                if prefer_canonical:
+                    prev_is_variant = kept[-1]["original"] != base_url
+                    curr_is_variant = snap["original"] != base_url
+                    curr_better = (prev_is_variant, prev_dist) > (curr_is_variant, curr_dist)
+                else:
+                    curr_better = curr_dist < prev_dist
                 if curr_better:
-                    discarded_dates.append(kept[-1]["timestamp"])
+                    discarded.append(kept[-1]["timestamp"])
                     kept[-1] = snap
                 else:
-                    discarded_dates.append(snap["timestamp"])
-        if discarded_dates:
-            # Format min_gap_secs as human-readable
-            gap_mins = min_gap_secs // 60
-            gap_hours = gap_mins // 60
-            gap_days = gap_hours // 24
-            if gap_days >= 1:
-                gap_str = f"{gap_days}d {gap_hours % 24}h" if gap_hours % 24 else f"{gap_days}d"
-            elif gap_hours >= 1:
-                gap_str = f"{gap_hours}h {gap_mins % 60}m" if gap_mins % 60 else f"{gap_hours}h"
-            else:
-                gap_str = f"{gap_mins}m"
-            dates_str = ", ".join(
-                ts_to_dt(ts).strftime("%Y-%m-%d") for ts in discarded_dates
-            )
-            log(f"[Gap]    {len(discarded_dates)} snapshot(s) discarded (min gap: {gap_str}): {dates_str}")
+                    discarded.append(snap["timestamp"])
         sampled = kept
 
-    return sampled
+    return sampled, discarded
+
+
+def _format_gap(min_gap_secs: int) -> str:
+    gap_mins  = min_gap_secs // 60
+    gap_hours = gap_mins // 60
+    gap_days  = gap_hours // 24
+    if gap_days >= 1:
+        return f"{gap_days}d {gap_hours % 24}h" if gap_hours % 24 else f"{gap_days}d"
+    if gap_hours >= 1:
+        return f"{gap_hours}h {gap_mins % 60}m" if gap_mins % 60 else f"{gap_hours}h"
+    return f"{gap_mins}m"
+
+
+def sample_snapshots(snapshots: list, cfg: dict) -> list:
+    frequency    = cfg["frequency"]
+    anchor       = cfg["sample_from"]
+    min_gap_secs = cfg["min_gap_secs"]
+    per_url_mode = cfg["split_output"] and cfg["filter_cdx_wildcard"]
+
+    if per_url_mode:
+        # Sample each distinct URL independently so no URL loses a time bucket
+        # to another URL's snapshot. Results are merged and re-sorted after.
+        by_url: dict = {}
+        for snap in snapshots:
+            by_url.setdefault(snap["original"], []).append(snap)
+
+        all_sampled   = []
+        all_discarded = []
+        for url_snaps in by_url.values():
+            sampled, discarded = _sample_group(url_snaps, cfg, prefer_canonical=False)
+            all_sampled.extend(sampled)
+            all_discarded.extend(discarded)
+
+        all_sampled.sort(key=lambda s: s["timestamp"])
+        log(f"[Sample] '{frequency}' ({anchor}) -> {len(all_sampled)} snapshots selected "
+            f"across {len(by_url)} URL(s).")
+        if all_discarded and min_gap_secs > 0:
+            dates_str = ", ".join(
+                ts_to_dt(ts).strftime("%Y-%m-%d") for ts in sorted(all_discarded)
+            )
+            log(f"[Gap]    {len(all_discarded)} snapshot(s) discarded "
+                f"(min gap: {_format_gap(min_gap_secs)}): {dates_str}")
+        return all_sampled
+
+    else:
+        sampled, discarded = _sample_group(snapshots, cfg, prefer_canonical=True)
+        log(f"[Sample] '{frequency}' ({anchor}) -> {len(sampled)} snapshots selected.")
+        if discarded and min_gap_secs > 0:
+            dates_str = ", ".join(
+                ts_to_dt(ts).strftime("%Y-%m-%d") for ts in discarded
+            )
+            log(f"[Gap]    {len(discarded)} snapshot(s) discarded "
+                f"(min gap: {_format_gap(min_gap_secs)}): {dates_str}")
+        return sampled
 
 
 # ── Step 3: Fetch One Snapshot ────────────────────────────────────────────────
 def fetch_snapshot(session, index: int, total: int, timestamp: str,
-                   original_url: str, cfg: dict) -> dict:
+                   original_url: str, cfg: dict, buffered: bool = True) -> dict:
     wayback_url = f"{WAYBACK_BASE}/{timestamp}/{original_url}"
     date_str, time_str = format_datetime(ts_to_dt(timestamp), cfg)
     prefix = f"[{index}/{total}] {date_str} {time_str}".strip()
@@ -922,13 +1045,15 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
                     else:
                         lines.append(f"{label}: (no value)")
 
-            buffer_and_flush(index, "\n".join(lines))
+            emit = buffer_and_flush if buffered else lambda idx, m: log(m)
+            emit(index, "\n".join(lines))
             return {
                 "timestamp": timestamp,
                 "date": date_str,
                 "time": time_str,
                 "elem_values": elem_values,
                 "url": wayback_url,
+                "original": original_url,
                 "error": "",
             }
 
@@ -942,19 +1067,25 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
             last_err = str(e)
 
         if attempt < cfg["retries"]:
-            # Append retry notice to this snapshot's pending buffer entry
-            with _print_lock:
-                pending = _print_buffer.get(index, prefix)
-                _print_buffer[index] = pending + f"\n  -> attempt {attempt}/{cfg['retries']} failed: {last_err} -- retrying ..."
+            retry_notice = f"\n  -> attempt {attempt}/{cfg['retries']} failed: {last_err} -- retrying ..."
+            if buffered:
+                # Append retry notice to this snapshot's pending buffer entry
+                with _print_lock:
+                    pending = _print_buffer.get(index, prefix)
+                    _print_buffer[index] = pending + retry_notice
+            else:
+                log(prefix + retry_notice)
             time.sleep(cfg["delay"])
 
-    buffer_and_flush(index, f"{prefix} ... failed ({last_err})")
+    emit = buffer_and_flush if buffered else lambda idx, m: log(m)
+    emit(index, f"{prefix} ... failed ({last_err})")
     return {
         "timestamp": timestamp,
         "date": date_str,
         "time": time_str,
         "elem_values": {elem["slot"]: [] for elem in cfg["elements"]},
         "url": wayback_url,
+        "original": original_url,
         "error": last_err,
     }
 
@@ -1251,7 +1382,10 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
     n = len(snap_dates)
 
     # ── Write output ──────────────────────────────────────────────────────────
-    ref_path = os.path.splitext(output_path)[0] + "_reformatted.csv"
+    ref_path_raw = os.path.splitext(output_path)[0] + "_reformatted.csv"
+    ref_path = resolve_output_path(ref_path_raw, cfg["file_override"])
+    if ref_path != ref_path_raw:
+        log(f"[Reformat] '{ref_path_raw}' already exists -- writing to '{ref_path}' instead.")
 
     with open(ref_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -1299,7 +1433,7 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
 
 # ── Run One Pass Over Snapshot Indices ────────────────────────────────────────
 def run_pass(indices: list, snapshots: list, results: list,
-             total: int, cfg: dict) -> list:
+             total: int, cfg: dict, buffered: bool = True) -> list:
     failed = []
     with requests.Session() as session:
         if cfg["threads"] > 1:
@@ -1310,7 +1444,7 @@ def run_pass(indices: list, snapshots: list, results: list,
                     fut = executor.submit(
                         fetch_snapshot, session,
                         i + 1, total,
-                        snap["timestamp"], snap["original"], cfg,
+                        snap["timestamp"], snap["original"], cfg, buffered,
                     )
                     futures[fut] = i
                 for fut in as_completed(futures):
@@ -1325,12 +1459,58 @@ def run_pass(indices: list, snapshots: list, results: list,
                 snap = snapshots[i]
                 result = fetch_snapshot(
                     session, i + 1, total,
-                    snap["timestamp"], snap["original"], cfg,
+                    snap["timestamp"], snap["original"], cfg, buffered,
                 )
                 results[i] = result
                 if result["error"]:
                     failed.append(i)
     return failed
+
+
+# ── Filter / URL → Filename Suffix ───────────────────────────────────────────
+def _is_wildcard_filter(f: dict) -> bool:
+    """True if this filter token used a * and may match multiple distinct URLs."""
+    return f["mode"] in ("all", "path_prefix", "contains")
+
+
+def filter_to_suffix(f: dict) -> str:
+    """
+    Convert a non-wildcard filter dict to a filename-safe suffix string.
+    Only called for filters where _is_wildcard_filter() is False
+    (i.e. mode is 'path' or 'exact').
+    Examples:
+      mode=path        /products/widget -> 'products_widget'
+      mode=exact       sort=new         -> 'sort_new'
+    """
+    pattern = f["pattern"] or ""
+    s = pattern.lstrip("/")
+    s = re.sub(r"[^a-zA-Z0-9]", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "filter"
+
+
+def url_to_suffix(original_url: str, base_url: str) -> str:
+    """
+    Derive a filename-safe suffix from a URL by stripping the base URL
+    and sanitising whatever remains (path + query).
+
+    Examples (base = 'https://example.com/products/'):
+      'https://example.com/products/widget-pro'          -> 'widget_pro'
+      'https://example.com/products/item?color=red'      -> 'item_color_red'
+      'https://example.com/products/'                    -> 'url'
+    """
+    from urllib.parse import urlparse
+    parsed     = urlparse(original_url)
+    base_path  = urlparse(base_url).path.rstrip("/")
+    rest_path  = parsed.path
+    if rest_path.startswith(base_path):
+        rest_path = rest_path[len(base_path):].lstrip("/")
+    else:
+        rest_path = rest_path.lstrip("/")
+    combined = rest_path + ("_" + parsed.query if parsed.query else "")
+    s = re.sub(r"[^a-zA-Z0-9]", "_", combined)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "url"
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -1345,7 +1525,7 @@ def main():
                              if cfg["min_gap_secs"] > 0 else "disabled")
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.4.4")
+    log("  Wayback Element Tracker v1.5.0")
     log("=" * 60)
     filter_any_raw = cfg["filter_any_raw"]
     filter_all_raw = cfg["filter_all_raw"]
@@ -1364,6 +1544,8 @@ def main():
                 label = f"{prefix}*"
             elif f["mode"] == "path":
                 label = f"{prefix}{f['pattern']}"
+            elif f["mode"] == "path_prefix":
+                label = f"{prefix}{f['pattern']}*"
             elif f["mode"] == "contains":
                 label = f"{prefix}{f['pattern']}*"
             else:
@@ -1397,6 +1579,8 @@ def main():
     if cfg["reformat"]:
         pairs_str = "  ".join(f"{ls}->{vs}" for ls, vs in cfg["reformat_pairs"])
         log(f"  Reformat   : yes  |  pairs: {pairs_str}  |  sort: {cfg['sort']}")
+    if cfg["split_output"]:
+        log(f"  Split out  : yes")
     log("=" * 60)
 
     snapshots = get_snapshots(cfg)
@@ -1415,20 +1599,144 @@ def main():
             break
         log(f"\n[End pass {pass_num}/{cfg['end_passes']}] Retrying {len(failed_indices)} failed snapshot(s) ...")
         time.sleep(cfg["delay"])
-        failed_indices = run_pass(failed_indices, snapshots, results, total, cfg)
+        failed_indices = run_pass(failed_indices, snapshots, results, total, cfg, buffered=False)
         drain_buffer()
 
-    output_path = resolve_output_path(cfg["output"], cfg["file_override"])
-    if output_path != cfg["output"]:
-        log(f"[CSV]    '{cfg['output']}' already exists -- writing to '{output_path}' instead.")
-    write_csv(results, cfg, output_path)
-    if cfg["reformat"]:
-        reformat_csv(results, cfg, output_path)
-    save_log(output_path)
+    # ── Write output ─────────────────────────────────────────────────────────
+    def _write_split(groups: dict):
+        """Write one CSV (+ optional reformat) per group. groups = {suffix: [results]}"""
+        log(f"\n[Split]  Writing {len(groups)} output file(s) ...")
+        base, ext = os.path.splitext(cfg["output"])
+        for suffix, group_results in groups.items():
+            raw_path = f"{base}_{suffix}{ext}"
+            out_path = resolve_output_path(raw_path, cfg["file_override"])
+            if out_path != raw_path:
+                log(f"[Split]  '{raw_path}' already exists -- writing to '{out_path}' instead.")
+            log(f"[Split]  '{suffix}' -> {len(group_results)} result(s) -> {out_path}")
+            write_csv(group_results, cfg, out_path)
+            if cfg["reformat"]:
+                reformat_csv(group_results, cfg, out_path)
+
+    def _split_by_url(result_list: list) -> dict:
+        """Group a list of results by distinct original URL, preventing suffix collisions."""
+        groups = {}
+        seen_suffixes = {}  # Tracks which URL owns which suffix
+        
+        for r in result_list:
+            orig = r.get("original", "")
+            if not orig:
+                continue
+                
+            base_suffix = url_to_suffix(orig, cfg["url"])
+            suffix = base_suffix
+            
+            # Handle collisions: if suffix is taken by a DIFFERENT url
+            counter = 2
+            while suffix in seen_suffixes and seen_suffixes[suffix] != orig:
+                suffix = f"{base_suffix}_{counter}"
+                counter += 1
+                
+            seen_suffixes[suffix] = orig
+            groups.setdefault(suffix, []).append(r)
+            
+        return groups
 
     elapsed = time.time() - start_time
     mins, secs = divmod(int(elapsed), 60)
     log(f"[Done]   Finished in {mins}m {secs}s")
+
+    if cfg["split_output"]:
+        any_includes = [f for f in filters_any if not f["negate"]]
+        all_includes = [f for f in filters_all if not f["negate"]]
+
+        if not any_includes and not all_includes:
+            # No include tokens at all — split by distinct URL
+            groups = _split_by_url([r for r in results if r])
+            if len(groups) <= 1:
+                log("[Split]  Only one distinct URL found -- writing single output file.")
+                out_path = resolve_output_path(cfg["output"], cfg["file_override"])
+                write_csv(results, cfg, out_path)
+                if cfg["reformat"]: reformat_csv(results, cfg, out_path)
+            else:
+                _write_split(groups)
+            save_log(cfg["output"])
+
+        else:
+            # Token mode:
+            #   filter_any non-wildcard tokens → one merged file per token
+            #   filter_any wildcard tokens     → per distinct URL (pooled)
+            #   filter_all wildcard tokens     → per distinct URL (pooled alongside filter_any wildcards)
+            #     (filter_all is AND-gating so grouping by token is meaningless;
+            #      only the distinct URLs that survived the filter matter)
+            groups = {}
+            wildcard_bucket = []
+
+            for f in any_includes:
+                matched = [
+                    r for r in results
+                    if r and r.get("original") and _single_filter_matches(
+                        r["original"], f["pattern"], f["mode"],
+                        cfg["case_sensitive"], cfg["match_child_paths"]
+                    )
+                ]
+                token_label = f["pattern"] or "*"
+                if not matched:
+                    log(f"[Split]  No results matched '{token_label}', skipping.")
+                    continue
+
+                if _is_wildcard_filter(f):
+                    wildcard_bucket.extend(matched)
+                else:
+                    suffix = filter_to_suffix(f)
+                    if suffix not in groups:
+                        groups[suffix] = matched
+
+            # filter_all wildcards: if any exist, all results need per-URL split.
+            # (Every result already matched ALL filter_all tokens, so there is no
+            # meaningful per-token grouping — only distinct URLs differ.)
+            if any(_is_wildcard_filter(f) for f in all_includes):
+                wildcard_bucket.extend([r for r in results if r and r.get("original")])
+
+            if wildcard_bucket:
+                # Deduplicate by object identity — a result can land in the bucket
+                # from multiple wildcard tokens but must only appear in one URL file.
+                seen_ids = set()
+                deduped = []
+                for m in wildcard_bucket:
+                    if id(m) not in seen_ids:
+                        seen_ids.add(id(m))
+                        deduped.append(m)
+                url_groups = _split_by_url(deduped)
+                # Merge URL groups into main groups; resolve any suffix collisions
+                # with existing token-named groups.
+                for u_suffix, u_results in url_groups.items():
+                    final_suffix = u_suffix
+                    counter = 2
+                    while final_suffix in groups:
+                        final_suffix = f"{u_suffix}_{counter}"
+                        counter += 1
+                    groups[final_suffix] = u_results
+
+            if groups:
+                _write_split(groups)
+            else:
+                log("[Split]  No groups produced -- writing single output file.")
+                out_path = resolve_output_path(cfg["output"], cfg["file_override"])
+                write_csv(results, cfg, out_path)
+                if cfg["reformat"]: reformat_csv(results, cfg, out_path)
+
+            save_log(cfg["output"])
+
+    else:
+        # Standard un-split output
+        out_path = resolve_output_path(cfg["output"], cfg["file_override"])
+        if out_path != cfg["output"]:
+            log(f"[CSV]    '{cfg['output']}' already exists -- writing to '{out_path}' instead.")
+        write_csv(results, cfg, out_path)
+        if cfg["reformat"]:
+            reformat_csv(results, cfg, out_path)
+        # Always log to the base output name so all runs append to the same file
+        save_log(cfg["output"])
 
 
 if __name__ == "__main__":

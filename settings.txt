@@ -3,6 +3,7 @@ url =
 filter_any = 
 filter_all = 
 case_sensitive = yes
+match_child_paths = no
 
 # --- HTML ELEMENTS ---------------------------------------------------------------------------------------
 element_1 = 
@@ -25,7 +26,7 @@ from_date =
 to_date = 
 
 # --- SNAPSHOT FREQUENCY ----------------------------------------------------------------------------------
-frequency = monthly
+frequency = all
 sample_from = start
 
 # --- DATE & TIME FORMAT ----------------------------------------------------------------------------------
@@ -42,6 +43,7 @@ output = wayback_results.csv
 file_override = yes
 csv_layout = rows
 padding = no
+split_output = no
 show_month = yes
 show_day = yes
 show_year = yes
