@@ -39,7 +39,7 @@ time_padding = yes
 show_seconds = no
 
 # --- OUTPUT ----------------------------------------------------------------------------------------------
-output = wayback_results.csv
+output = wayback_results
 file_override = yes
 csv_layout = rows
 padding = no
@@ -61,5 +61,5 @@ fill_first = no
 min_gap = 0.5
 delay = 10
 retries = 5
-end_passes = 2
+fallback_candidates = 2
 threads = 3

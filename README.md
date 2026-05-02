@@ -135,7 +135,7 @@ Show seconds in the time? (`yes` / `no`)
 After each run, a `.log` file is saved alongside the CSV with the same base name (e.g. `wayback_results.log`). Each new program execution is added to the end of the log file, which will track the output up to the last 10 runs.  
 
 `output`  
-CSV file name
+CSV file name.
 
 `file_override`  
 Whether to overwrite the output file(s) if it already exists (`yes` / `no`)  
@@ -167,7 +167,7 @@ When enabled, `filter_any` follows this structure:
 &nbsp; &nbsp; &nbsp;filters such as `/subpage`, `sort=new` have all matching variants merged into their respective files  
 &nbsp; &nbsp; &nbsp;substring filters (e.g. `/subpage*`, `*`) have one file per distinct URL matched by that filter  
 
-When enabled, if `filter_all` contains substring filters, those also have one file per distinct URL. `filter_all` is not used in cases such as `/subpage` `sort=new` since its  logic means every result already matched both filters.
+When enabled, if `filter_all` contains substring filters, those also have one file per distinct URL. `filter_all` is not used in cases such as `/subpage` `sort=new` since its logic means every result already matched both filters.
 
 When neither has only `!` filters, the split falls back to one file per distinct URL.
 <br>
@@ -239,8 +239,9 @@ Seconds to wait between retry attempts and between CDX query retries.
 How many times to retry a failing snapshot or CDX query before giving up.  
 Note: HTTP 404 and 403 responses are not retried, they fail immediately.
 
-`end_passes`  
-How many times to retry all snapshots that failed at the end of the script.
+`fallback_candidates`  
+When a snapshot fails, how many closest snapshots from the same time period to try before giving up.  
+Has no effect when `frequency = all`.
 
 `threads`  
 Number of parallel threads for fetching snapshots.

@@ -8,6 +8,9 @@ import threading
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+import html
+from urllib.parse import urlparse, parse_qs, unquote
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -118,7 +121,6 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str,
         # Segment-boundary match: pattern must appear as a complete path segment.
         # With match_child_paths=True:  also matches deeper children (/a matches /a/b/c)
         # With match_child_paths=False: only matches the exact end of the path
-        from urllib.parse import urlparse
         path = urlparse(url).path
         idx = path.find(pattern)
         if idx == -1:
@@ -130,7 +132,6 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str,
             return end == len(path)
     if mode == "path_prefix":
         # Prefix/substring match within the path only.
-        from urllib.parse import urlparse
         return pattern in urlparse(url).path
     if mode == "contains":
         return pattern in url
@@ -139,8 +140,6 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str,
     #   &amp%3B  (HTML entity &amp; with ; percent-encoded)
     #   \u0026   (JSON-style unicode escape, stored literally)
     # Normalise all variants to plain & before parsing.
-    from urllib.parse import urlparse, parse_qs, unquote
-    import html
     query = urlparse(url).query
     query = html.unescape(unquote(query))   # &amp%3B -> &amp; -> &
     query = query.replace('\\u0026', '&')   # literal \u0026 -> &
@@ -231,7 +230,7 @@ def buffer_and_flush(index: int, msg: str):
 def drain_buffer():
     """Flush all remaining consecutive buffer entries.
     Call this after a threaded run_pass to ensure all output is printed
-    before any subsequent log messages (e.g. end pass notices).
+    before any subsequent log messages.
     """
     with _print_lock:
         while _next_to_print[0] in _print_buffer:
@@ -538,55 +537,101 @@ def prev_period_dt(dt: datetime, frequency: str) -> datetime:
     return dt
 
 
-
 def yesno(val: str) -> bool:
     return val.strip().lower() == "yes"
 
 
+DEFAULT_SETTINGS = """\
+# --- URL -------------------------------------------------------------------------------------------------
+url = 
+filter_any = 
+filter_all = 
+case_sensitive = yes
+match_child_paths = no
+
+# --- HTML ELEMENTS ---------------------------------------------------------------------------------------
+element_1 = 
+extract_1 = 
+
+element_2 = 
+extract_2 = 
+
+element_3 = 
+extract_3 = 
+
+element_4 = 
+extract_4 = 
+
+element_5 = 
+extract_5 = 
+
+# --- DATE RANGE ------------------------------------------------------------------------------------------
+from_date = 
+to_date = 
+
+# --- SNAPSHOT FREQUENCY ----------------------------------------------------------------------------------
+frequency = all
+sample_from = start
+
+# --- DATE & TIME FORMAT ----------------------------------------------------------------------------------
+convention = us
+date_style = long
+year_digits = 4
+date_padding = no
+time_format = 12h
+time_padding = yes
+show_seconds = no
+
+# --- OUTPUT ----------------------------------------------------------------------------------------------
+output = wayback_results
+file_override = yes
+csv_layout = rows
+padding = no
+split_output = no
+show_month = yes
+show_day = yes
+show_year = yes
+show_time = yes
+
+# --- REFORMAT --------------------------------------------------------------------------------------------
+reformat = no
+label_elements = 
+value_elements = 
+sort = alphabet
+zero_fill = no
+fill_first = no
+
+# --- ADVANCED --------------------------------------------------------------------------------------------
+min_gap = 0.5
+delay = 10
+retries = 5
+fallback_candidates = 2
+threads = 3
+"""
+
+
 def load_settings(path="settings.txt") -> dict:
     if not os.path.exists(path):
-        sys.exit(f"[Error] settings.txt not found at: {os.path.abspath(path)}")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(DEFAULT_SETTINGS)
+        abs_path = os.path.abspath(path)
+        print(f"[Setup]  settings.txt not found -- created a blank one at: {abs_path}")
+        print(f"[Setup]  Fill in your url and element_1, then run the program again.")
+        sys.exit(0)
 
-    raw = {
-        "url": "",
-        "from_date": "",
-        "to_date": "",
-        "frequency": "monthly",
-        "sample_from": "start",
-        "convention": "us",
-        "date_style": "long",
-        "year_digits": "4",
-        "date_padding": "no",
-        "time_format": "12h",
-        "time_padding": "yes",
-        "show_seconds": "no",
-        "output": "wayback_results.csv",
-        "file_override": "yes",
-        "show_month": "yes",
-        "show_day": "yes",
-        "show_year": "yes",
-        "show_time": "yes",
-        "csv_layout": "rows",
-        "padding": "no",
-        "filter_any": "",
-        "filter_all": "",
-        "case_sensitive": "yes",
-        "min_gap": "0.5",
-        "delay": "10",
-        "retries": "5",
-        "end_passes": "2",
-        "threads": "3",
-        "reformat": "no",
-        "label_elements": "",
-        "value_elements": "",
-        "sort": "alphabet",
-        "zero_fill": "no",
-        "fill_first": "no",
-        "split_output": "no",
-        "match_child_paths": "no",
-        **{f"element_{i}": "" for i in range(1, MAX_ELEMENTS + 1)},
-        **{f"extract_{i}": "text" for i in range(1, MAX_ELEMENTS + 1)},
-    }
+    # Seed raw defaults by parsing DEFAULT_SETTINGS — single source of truth.
+    raw = {}
+    for line in DEFAULT_SETTINGS.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        raw[k.strip().lower()] = v.strip()
+    # extract_N defaults to "text" when blank in DEFAULT_SETTINGS
+    for i in range(1, MAX_ELEMENTS + 1):
+        if not raw.get(f"extract_{i}"):
+            raw[f"extract_{i}"] = "text"
+
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -596,7 +641,7 @@ def load_settings(path="settings.txt") -> dict:
                 continue
             key, _, value = line.partition("=")
             key = key.strip().lower().replace("-", "_")
-            
+
             # Accept legacy 'url_variants' as an alias for 'filter_any'
             if key == "url_variants":
                 key = "filter_any"
@@ -604,12 +649,16 @@ def load_settings(path="settings.txt") -> dict:
                     value = "*"
                 elif value.lower() in ("no", "false", "0"):
                     value = ""
-            
+
             # Accept legacy 'split_by' as an alias for 'split_output'
             if key == "split_by":
                 value = "yes" if value.strip().lower() in ("url", "filter", "both") else value
                 key = "split_output"
-            
+
+            # Accept legacy 'end_passes' gracefully (ignored)
+            if key == "end_passes":
+                continue
+
             value = value.strip()
             if key in raw and value:
                 raw[key] = value
@@ -623,10 +672,14 @@ def load_settings(path="settings.txt") -> dict:
         url = url.rstrip("*")
         if not raw["filter_any"].strip():
             raw["filter_any"] = "*"
-        # else: filter_any already has tokens; just ensure CDX wildcard fires
         raw["_url_wildcard"] = "yes"
     else:
         raw["_url_wildcard"] = "no"
+
+    # Auto-append .csv if the output setting has no file extension
+    if not os.path.splitext(raw["output"])[1]:
+        raw["output"] = raw["output"] + ".csv"
+
     if raw["frequency"] not in FREQ_MAP:
         sys.exit(f"[Error] 'frequency' must be one of: {', '.join(FREQ_MAP)}")
     if raw["sample_from"].lower() not in ("start", "middle", "end"):
@@ -646,6 +699,13 @@ def load_settings(path="settings.txt") -> dict:
             raise ValueError
     except ValueError:
         sys.exit("[Error] 'min_gap' must be a number >= 0, e.g. 0.5")
+
+    try:
+        fallback_candidates = int(raw["fallback_candidates"])
+        if fallback_candidates < 0:
+            raise ValueError
+    except ValueError:
+        sys.exit("[Error] 'fallback_candidates' must be an integer >= 0")
 
     min_gap_secs = int(FREQ_SECONDS.get(raw["frequency"], 0) * min_gap_frac)
 
@@ -691,7 +751,6 @@ def load_settings(path="settings.txt") -> dict:
                 sys.exit(f"[Error] label_elements and value_elements must be different "
                          f"(slot {ls} appears in both).")
         reformat_pairs = list(zip(label_slots, value_slots))
-
 
     elements = []
     for i in range(1, MAX_ELEMENTS + 1):
@@ -769,7 +828,7 @@ def load_settings(path="settings.txt") -> dict:
         "file_override": yesno(raw["file_override"]),
         "delay": float(raw["delay"]),
         "retries": int(raw["retries"]),
-        "end_passes": int(raw["end_passes"]),
+        "fallback_candidates": fallback_candidates,
         "threads": threads,
         "reformat": do_reformat,
         "reformat_pairs": reformat_pairs,
@@ -845,18 +904,24 @@ def _sample_group(snapshots: list, cfg: dict,
                   prefer_canonical: bool = True) -> tuple:
     """
     Sample one flat list of snapshots according to frequency/anchor/min_gap.
-    Returns (sampled, discarded_timestamps).
+    Returns (sampled, discarded_timestamps, fallbacks_map).
+
+    fallbacks_map : dict  – maps each selected snapshot's timestamp to a list
+                            of runner-up snapshots from the same time bucket,
+                            sorted by proximity to the anchor. Capped at
+                            cfg["fallback_candidates"] entries per bucket.
 
     prefer_canonical=True  – within a time bucket, the base URL is preferred
                              over variants as a tiebreaker (single-file mode).
     prefer_canonical=False – pure time-distance tiebreaker only (per-URL mode,
                              where all snapshots already share the same URL).
     """
-    frequency   = cfg["frequency"]
-    anchor      = cfg["sample_from"]
+    frequency    = cfg["frequency"]
+    anchor       = cfg["sample_from"]
     min_gap_secs = cfg["min_gap_secs"]
-    freq_fmt    = FREQ_MAP.get(frequency)
-    base_url    = cfg["url"]
+    freq_fmt     = FREQ_MAP.get(frequency)
+    base_url     = cfg["url"]
+    n_fallbacks  = cfg["fallback_candidates"]
 
     def sort_key(s, target):
         time_dist = abs((ts_to_dt(s["timestamp"]) - target).total_seconds())
@@ -865,10 +930,10 @@ def _sample_group(snapshots: list, cfg: dict,
             return (is_variant, time_dist)
         return time_dist
 
-    # frequency = "all": no bucketing, just min_gap filtering
+    # frequency = "all": no bucketing, just min_gap filtering, no fallbacks
     if freq_fmt is None:
         if min_gap_secs == 0:
-            return snapshots, []
+            return snapshots, [], {}
         kept = [snapshots[0]]
         discarded = []
         for snap in snapshots[1:]:
@@ -877,21 +942,23 @@ def _sample_group(snapshots: list, cfg: dict,
                 kept.append(snap)
             else:
                 discarded.append(snap["timestamp"])
-        return kept, discarded
+        return kept, discarded, {}
 
-    # Bucket by period, pick best per bucket
+    # Bucket by period, sort each group by proximity to anchor, pick best per bucket
     buckets: dict = {}
     for snap in snapshots:
         bucket = ts_to_dt(snap["timestamp"]).strftime(freq_fmt)
         buckets.setdefault(bucket, []).append(snap)
 
+    bucket_sorted: dict = {}
     sampled = []
     for bucket in sorted(buckets):
         group = buckets[bucket]
         ref_dt = ts_to_dt(group[0]["timestamp"])
         target = anchor_dt_for(ref_dt, frequency, anchor)
-        best = min(group, key=lambda s: sort_key(s, target))
-        sampled.append(best)
+        sorted_group = sorted(group, key=lambda s: sort_key(s, target))
+        bucket_sorted[bucket] = sorted_group
+        sampled.append(sorted_group[0])
 
     # Min-gap pass
     discarded = []
@@ -921,7 +988,18 @@ def _sample_group(snapshots: list, cfg: dict,
                     discarded.append(snap["timestamp"])
         sampled = kept
 
-    return sampled, discarded
+    # Build fallback lists after min_gap so we use the final winner per bucket.
+    # Fallbacks are the other sorted candidates from the same bucket, capped at n_fallbacks.
+    fallbacks_map: dict = {}
+    if n_fallbacks > 0:
+        for snap in sampled:
+            bucket = ts_to_dt(snap["timestamp"]).strftime(freq_fmt)
+            remaining = [c for c in bucket_sorted.get(bucket, [])
+                         if c["timestamp"] != snap["timestamp"]]
+            if remaining:
+                fallbacks_map[snap["timestamp"]] = remaining[:n_fallbacks]
+
+    return sampled, discarded, fallbacks_map
 
 
 def _format_gap(min_gap_secs: int) -> str:
@@ -935,7 +1013,12 @@ def _format_gap(min_gap_secs: int) -> str:
     return f"{gap_mins}m"
 
 
-def sample_snapshots(snapshots: list, cfg: dict) -> list:
+def sample_snapshots(snapshots: list, cfg: dict) -> tuple:
+    """
+    Returns (sampled_snapshots, fallbacks_map).
+    fallbacks_map maps each snapshot's timestamp to its ordered list of fallback
+    candidates from the same time bucket.
+    """
     frequency    = cfg["frequency"]
     anchor       = cfg["sample_from"]
     min_gap_secs = cfg["min_gap_secs"]
@@ -950,10 +1033,12 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
 
         all_sampled   = []
         all_discarded = []
+        combined_fallbacks: dict = {}
         for url_snaps in by_url.values():
-            sampled, discarded = _sample_group(url_snaps, cfg, prefer_canonical=False)
+            sampled, discarded, fb = _sample_group(url_snaps, cfg, prefer_canonical=False)
             all_sampled.extend(sampled)
             all_discarded.extend(discarded)
+            combined_fallbacks.update(fb)
 
         all_sampled.sort(key=lambda s: s["timestamp"])
         log(f"[Sample] '{frequency}' ({anchor}) -> {len(all_sampled)} snapshots selected "
@@ -964,10 +1049,10 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
             )
             log(f"[Gap]    {len(all_discarded)} snapshot(s) discarded "
                 f"(min gap: {_format_gap(min_gap_secs)}): {dates_str}")
-        return all_sampled
+        return all_sampled, combined_fallbacks
 
     else:
-        sampled, discarded = _sample_group(snapshots, cfg, prefer_canonical=True)
+        sampled, discarded, fallbacks_map = _sample_group(snapshots, cfg, prefer_canonical=True)
         log(f"[Sample] '{frequency}' ({anchor}) -> {len(sampled)} snapshots selected.")
         if discarded and min_gap_secs > 0:
             dates_str = ", ".join(
@@ -975,116 +1060,138 @@ def sample_snapshots(snapshots: list, cfg: dict) -> list:
             )
             log(f"[Gap]    {len(discarded)} snapshot(s) discarded "
                 f"(min gap: {_format_gap(min_gap_secs)}): {dates_str}")
-        return sampled
+        return sampled, fallbacks_map
 
 
 # ── Step 3: Fetch One Snapshot ────────────────────────────────────────────────
 def fetch_snapshot(session, index: int, total: int, timestamp: str,
-                   original_url: str, cfg: dict, buffered: bool = True) -> dict:
-    wayback_url = f"{WAYBACK_BASE}/{timestamp}/{original_url}"
-    date_str, time_str = format_datetime(ts_to_dt(timestamp), cfg)
-    prefix = f"[{index}/{total}] {date_str} {time_str}".strip()
+                   original_url: str, cfg: dict, buffered: bool = True,
+                   fallbacks: list = None) -> dict:
+    """
+    Fetch a snapshot, trying fallback candidates if the primary fails with a
+    definitive error (404/403) or exhausts all retries.
 
-    max_sel_len = max(len(e["selector"]) for e in cfg["elements"])
-    last_err = ""
-
-    for attempt in range(1, cfg["retries"] + 1):
-        try:
-            resp = session.get(
-                wayback_url, timeout=15,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-            )
-            resp.raise_for_status()
-
-            soup = BeautifulSoup(resp.text, "lxml")
-            elem_values = {}
-            lines = [prefix]
-
-            for elem in cfg["elements"]:
-                sel_chain = elem["selector_chain"]
-                extract = elem["extract"]
-                sel_display = elem["selector"]  # last/only step label
-                label = f"  {sel_display:<{max_sel_len}}"
-
-                # Walk the selector chain: start from the whole document,
-                # then narrow into matching children at each step.
-                # Each step is {"sel": str|None, "nth": int|None}.
-                #   sel=None  -> pick the nth direct child element of each scope
-                #   nth=None  -> keep all matches of sel
-                #   nth=N     -> keep only the Nth match of sel (1-based)
-                current_scope = [soup]
-                for step in sel_chain:
-                    sel = step["sel"]
-                    nth = step["nth"]
-                    next_scope = []
-                    for scope in current_scope:
-                        if sel is None:
-                            # Bare nth-child step: pick among direct element children
-                            children = [c for c in scope.children
-                                        if hasattr(c, "name") and c.name]
-                            if nth is not None and 1 <= nth <= len(children):
-                                next_scope.append(children[nth - 1])
-                        else:
-                            found = scope.select(sel)
-                            if nth is not None:
-                                if 1 <= nth <= len(found):
-                                    next_scope.append(found[nth - 1])
-                            else:
-                                next_scope.extend(found)
-                    current_scope = next_scope
-                matches = current_scope
-                if not matches:
-                    elem_values[elem["slot"]] = []
-                    lines.append(f"{label}: (no element)")
-                else:
-                    values = [v for m in matches
-                              for v in [extract_value(m, extract)] if v]
-                    elem_values[elem["slot"]] = values
-                    if values:
-                        lines.append(f"{label}: {', '.join(values)}")
-                    else:
-                        lines.append(f"{label}: (no value)")
-
-            emit = buffer_and_flush if buffered else lambda idx, m: log(m)
-            emit(index, "\n".join(lines))
-            return {
-                "timestamp": timestamp,
-                "date": date_str,
-                "time": time_str,
-                "elem_values": elem_values,
-                "url": wayback_url,
-                "original": original_url,
-                "error": "",
-            }
-
-        except requests.exceptions.Timeout:
-            last_err = "timeout"
-        except requests.exceptions.HTTPError as e:
-            last_err = f"HTTP {e.response.status_code}"
-            if e.response.status_code in (404, 403):
-                break
-        except Exception as e:
-            last_err = str(e)
-
-        if attempt < cfg["retries"]:
-            retry_notice = f"\n  -> attempt {attempt}/{cfg['retries']} failed: {last_err} -- retrying ..."
-            if buffered:
-                # Append retry notice to this snapshot's pending buffer entry
-                with _print_lock:
-                    pending = _print_buffer.get(index, prefix)
-                    _print_buffer[index] = pending + retry_notice
-            else:
-                log(prefix + retry_notice)
-            time.sleep(cfg["delay"])
+    Fallbacks are snapshots from the same time bucket sorted by proximity to
+    the anchor, so they are always within the same frequency period.
+    """
+    candidates = [{"timestamp": timestamp, "original": original_url}]
+    if fallbacks:
+        candidates.extend(fallbacks)
 
     emit = buffer_and_flush if buffered else lambda idx, m: log(m)
-    emit(index, f"{prefix} ... failed ({last_err})")
+    max_sel_len = max(len(e["selector"]) for e in cfg["elements"])
+
+    # Keep track of the primary date/time for the failure return dict
+    primary_date_str, primary_time_str = format_datetime(ts_to_dt(timestamp), cfg)
+    last_err = ""
+
+    for cand_idx, candidate in enumerate(candidates):
+        curr_ts  = candidate["timestamp"]
+        curr_url = candidate["original"]
+        wayback_url = f"{WAYBACK_BASE}/{curr_ts}/{curr_url}"
+        date_str, time_str = format_datetime(ts_to_dt(curr_ts), cfg)
+        prefix = f"[{index}/{total}] {date_str} {time_str}".strip()
+
+        if cand_idx > 0:
+            log(f"  -> trying fallback {cand_idx}/{len(candidates) - 1}: {curr_ts}")
+
+        hit_definitive = False
+
+        for attempt in range(1, cfg["retries"] + 1):
+            try:
+                resp = session.get(
+                    wayback_url, timeout=15,
+                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                )
+                resp.raise_for_status()
+
+                soup = BeautifulSoup(resp.text, "lxml")
+                elem_values = {}
+                lines = [prefix]
+
+                for elem in cfg["elements"]:
+                    sel_chain = elem["selector_chain"]
+                    extract = elem["extract"]
+                    sel_display = elem["selector"]
+                    label = f"  {sel_display:<{max_sel_len}}"
+
+                    current_scope = [soup]
+                    for step in sel_chain:
+                        sel = step["sel"]
+                        nth = step["nth"]
+                        next_scope = []
+                        for scope in current_scope:
+                            if sel is None:
+                                children = [c for c in scope.children
+                                            if hasattr(c, "name") and c.name]
+                                if nth is not None and 1 <= nth <= len(children):
+                                    next_scope.append(children[nth - 1])
+                            else:
+                                found = scope.select(sel)
+                                if nth is not None:
+                                    if 1 <= nth <= len(found):
+                                        next_scope.append(found[nth - 1])
+                                else:
+                                    next_scope.extend(found)
+                        current_scope = next_scope
+                    matches = current_scope
+                    if not matches:
+                        elem_values[elem["slot"]] = []
+                        lines.append(f"{label}: (no element)")
+                    else:
+                        values = [v for m in matches
+                                  for v in [extract_value(m, extract)] if v]
+                        elem_values[elem["slot"]] = values
+                        if values:
+                            lines.append(f"{label}: {', '.join(values)}")
+                        else:
+                            lines.append(f"{label}: (no value)")
+
+                emit(index, "\n".join(lines))
+                return {
+                    "timestamp": curr_ts,
+                    "date": date_str,
+                    "time": time_str,
+                    "elem_values": elem_values,
+                    "url": wayback_url,
+                    "original": curr_url,
+                    "error": "",
+                }
+
+            except requests.exceptions.Timeout:
+                last_err = "timeout"
+            except requests.exceptions.HTTPError as e:
+                last_err = f"HTTP {e.response.status_code}"
+                if e.response.status_code in (404, 403):
+                    hit_definitive = True
+                    break   # skip remaining retries, move to next candidate
+            except Exception as e:
+                last_err = str(e)
+
+            if attempt < cfg["retries"] and not hit_definitive:
+                retry_notice = f"\n  -> attempt {attempt}/{cfg['retries']} failed: {last_err} -- retrying ..."
+                if buffered:
+                    with _print_lock:
+                        pending = _print_buffer.get(index, prefix)
+                        _print_buffer[index] = pending + retry_notice
+                else:
+                    log(prefix + retry_notice)
+                time.sleep(cfg["delay"])
+
+        # Move to next candidate if one exists
+        if cand_idx < len(candidates) - 1:
+            continue
+        break  # all candidates exhausted
+
+    # All candidates failed — report using the primary snapshot's info
+    primary_prefix = f"[{index}/{total}] {primary_date_str} {primary_time_str}".strip()
+    emit(index, f"{primary_prefix} ... failed ({last_err})")
     return {
         "timestamp": timestamp,
-        "date": date_str,
-        "time": time_str,
+        "date": primary_date_str,
+        "time": primary_time_str,
         "elem_values": {elem["slot"]: [] for elem in cfg["elements"]},
-        "url": wayback_url,
+        "url": f"{WAYBACK_BASE}/{timestamp}/{original_url}",
         "original": original_url,
         "error": last_err,
     }
@@ -1173,7 +1280,6 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
     results = apply_padding(results, cfg)
 
     # Each descriptor: (label, fn(result) -> list of values)
-    # Console shows them comma-separated; CSV expands into separate columns/rows.
     descriptors = []
     descriptors.append(("date", lambda r, _=None: [r["date"]]))
     if show_time:
@@ -1232,23 +1338,6 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
     Pivot the raw output so that each unique label value (from reformat_label_slot)
     becomes its own row (rows layout) or column (columns layout), with snapshot
     dates/times spread across columns/rows respectively.
-
-    Output structure for rows layout:
-        col 0         : row label  (date / time / url / error / <label values>)
-        cols 1..N     : one per snapshot
-
-    Output structure for columns layout:
-        row 0         : col header (date / time / url / error / <label values>)
-        rows 1..N     : one per snapshot
-
-    The label element and value element are identified by their slot number.
-    For each snapshot the label[i] -> value[i] pairing is built by aligning
-    the parallel lists produced by those two elements (rank i of labels pairs
-    with rank i of values).
-
-    Special rows/cols carried through:
-        date, time   - always first (time only if show_time is enabled)
-        url, error   - always placed after date/time, before the label rows/cols
     """
     if not results:
         log("[Reformat] No results to reformat.")
@@ -1331,10 +1420,6 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
     snap_errors = [r["error"] if r else "" for r in results]
 
     # ── Zero-fill pre-processing ──────────────────────────────────────────────
-    # For each label, compute which column index gets "0":
-    #   None  -> no zero for this label
-    #   >= 0  -> replace that column's value with "0"
-    #   -1    -> needs a new column prepended (fill_first case)
     zero_cols: dict = {}
     if zero_fill != "no":
         for ordered_labels, snap_maps in pair_data:
@@ -1346,7 +1431,6 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
                     zero_cols[label] = -1 if fill_first else None
                 else:
                     if zero_fill == "snapshot":
-                        # Put "0" in the last real (non-padded) snapshot before first
                         real_before = next(
                             (i for i in range(first - 1, -1, -1)
                              if results[i] and results[i].get("timestamp")),
@@ -1354,11 +1438,8 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
                         )
                         zero_cols[label] = real_before if real_before is not None else first - 1
                     else:
-                        # adjacent: put "0" in the period cell immediately before first
                         zero_cols[label] = first - 1
 
-        # If any label needs column -1, prepend a synthetic column for the
-        # period immediately before the dataset starts.
         if any(v == -1 for v in zero_cols.values()):
             first_real = next((r for r in results if r and r.get("timestamp")), None)
             if first_real:
@@ -1371,9 +1452,7 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
             snap_times  = [prev_time] + snap_times
             snap_urls   = [""] + snap_urls
             snap_errors = [""] + snap_errors
-            # Shift snap_maps: prepend empty entry so column indices stay aligned
             pair_data = [(ol, [{}] + sm) for ol, sm in pair_data]
-            # -1 -> 0; all other non-None values shift up by 1
             zero_cols = {
                 lbl: (0 if v == -1 else v + 1 if v is not None else None)
                 for lbl, v in zero_cols.items()
@@ -1433,7 +1512,9 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
 
 # ── Run One Pass Over Snapshot Indices ────────────────────────────────────────
 def run_pass(indices: list, snapshots: list, results: list,
-             total: int, cfg: dict, buffered: bool = True) -> list:
+             total: int, cfg: dict, buffered: bool = True,
+             fallbacks_map: dict = None) -> list:
+    fallbacks_map = fallbacks_map or {}
     failed = []
     with requests.Session() as session:
         if cfg["threads"] > 1:
@@ -1445,6 +1526,7 @@ def run_pass(indices: list, snapshots: list, results: list,
                         fetch_snapshot, session,
                         i + 1, total,
                         snap["timestamp"], snap["original"], cfg, buffered,
+                        fallbacks_map.get(snap["timestamp"]),
                     )
                     futures[fut] = i
                 for fut in as_completed(futures):
@@ -1460,6 +1542,7 @@ def run_pass(indices: list, snapshots: list, results: list,
                 result = fetch_snapshot(
                     session, i + 1, total,
                     snap["timestamp"], snap["original"], cfg, buffered,
+                    fallbacks_map.get(snap["timestamp"]),
                 )
                 results[i] = result
                 if result["error"]:
@@ -1478,9 +1561,6 @@ def filter_to_suffix(f: dict) -> str:
     Convert a non-wildcard filter dict to a filename-safe suffix string.
     Only called for filters where _is_wildcard_filter() is False
     (i.e. mode is 'path' or 'exact').
-    Examples:
-      mode=path        /products/widget -> 'products_widget'
-      mode=exact       sort=new         -> 'sort_new'
     """
     pattern = f["pattern"] or ""
     s = pattern.lstrip("/")
@@ -1493,13 +1573,7 @@ def url_to_suffix(original_url: str, base_url: str) -> str:
     """
     Derive a filename-safe suffix from a URL by stripping the base URL
     and sanitising whatever remains (path + query).
-
-    Examples (base = 'https://example.com/products/'):
-      'https://example.com/products/widget-pro'          -> 'widget_pro'
-      'https://example.com/products/item?color=red'      -> 'item_color_red'
-      'https://example.com/products/'                    -> 'url'
     """
-    from urllib.parse import urlparse
     parsed     = urlparse(original_url)
     base_path  = urlparse(base_url).path.rstrip("/")
     rest_path  = parsed.path
@@ -1516,37 +1590,34 @@ def url_to_suffix(original_url: str, base_url: str) -> str:
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     start_time = time.time()
-    cfg = load_settings("settings.txt")
+    cfg = load_settings()
 
-    sample_dt = datetime(2023, 11, 5, 14, 30, 22)
-    sample_date, sample_time = format_datetime(sample_dt, cfg)
-    sample_str = " | ".join(p for p in [sample_date, sample_time] if p)
-    gap_info = (f"{cfg['min_gap_frac']} × period"
-                             if cfg["min_gap_secs"] > 0 else "disabled")
+    filters_any = cfg["filters_any"]
+    filters_all = cfg["filters_all"]
+
+    gap_info = (_format_gap(cfg["min_gap_secs"])
+                if cfg["min_gap_secs"] > 0 else "disabled")
+
+    date_parts = []
+    if cfg["show_month"]: date_parts.append("month")
+    if cfg["show_day"]:   date_parts.append("day")
+    if cfg["show_year"]:  date_parts.append("year")
+    if cfg["show_time"]:  date_parts.append("time")
+    sample_str = ", ".join(date_parts)
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.5.0")
+    log("  Wayback Element Tracker v1.5.1")
     log("=" * 60)
-    filter_any_raw = cfg["filter_any_raw"]
-    filter_all_raw = cfg["filter_all_raw"]
-    filters_any    = cfg["filters_any"]
-    filters_all    = cfg["filters_all"]
 
-    def _filter_display(filters, raw):
-        if not raw:
-            return ""
+    def _filter_display(filters):
         if not filters:
-            return "(*)"
+            return ""
         parts = []
         for f in filters:
             prefix = "!" if f["negate"] else ""
             if f["mode"] == "all":
                 label = f"{prefix}*"
-            elif f["mode"] == "path":
-                label = f"{prefix}{f['pattern']}"
-            elif f["mode"] == "path_prefix":
-                label = f"{prefix}{f['pattern']}*"
-            elif f["mode"] == "contains":
+            elif f["mode"] in ("path_prefix", "contains"):
                 label = f"{prefix}{f['pattern']}*"
             else:
                 label = f"{prefix}{f['pattern']}"
@@ -1554,8 +1625,8 @@ def main():
         return ", ".join(parts)
 
     case_tag = "case-sensitive" if cfg["case_sensitive"] else "case-insensitive"
-    any_display = _filter_display(filters_any, filter_any_raw)
-    all_display = _filter_display(filters_all, filter_all_raw)
+    any_display = _filter_display(filters_any)
+    all_display = _filter_display(filters_all)
 
     if any_display or all_display:
         parts = []
@@ -1576,6 +1647,8 @@ def main():
     log(f"  CSV layout : {cfg['csv_layout']}  |  result padding: {'yes' if cfg['padding'] else 'no'}")
     override_str = "yes" if cfg["file_override"] else "no"
     log(f"  Output     : {cfg['output']}  |  override: {override_str}")
+    if cfg["fallback_candidates"] > 0:
+        log(f"  Fallbacks  : {cfg['fallback_candidates']} candidate(s) per period")
     if cfg["reformat"]:
         pairs_str = "  ".join(f"{ls}->{vs}" for ls, vs in cfg["reformat_pairs"])
         log(f"  Reformat   : yes  |  pairs: {pairs_str}  |  sort: {cfg['sort']}")
@@ -1587,20 +1660,22 @@ def main():
     if not snapshots:
         sys.exit("No snapshots to process.")
 
-    snapshots = sample_snapshots(snapshots, cfg)
+    snapshots, fallbacks_map = sample_snapshots(snapshots, cfg)
     total = len(snapshots)
     results = [None] * total
 
-    failed_indices = run_pass(list(range(total)), snapshots, results, total, cfg)
+    failed_indices = run_pass(
+        list(range(total)), snapshots, results, total, cfg,
+        buffered=True, fallbacks_map=fallbacks_map,
+    )
     drain_buffer()
 
-    for pass_num in range(1, cfg["end_passes"] + 1):
-        if not failed_indices:
-            break
-        log(f"\n[End pass {pass_num}/{cfg['end_passes']}] Retrying {len(failed_indices)} failed snapshot(s) ...")
-        time.sleep(cfg["delay"])
-        failed_indices = run_pass(failed_indices, snapshots, results, total, cfg, buffered=False)
-        drain_buffer()
+    if failed_indices:
+        log(f"\n[Done]   {len(failed_indices)} snapshot(s) failed after exhausting all fallback candidates.")
+
+    elapsed = time.time() - start_time
+    mins, secs = divmod(int(elapsed), 60)
+    log(f"[Done]   Finished in {mins}m {secs}s")
 
     # ── Write output ─────────────────────────────────────────────────────────
     def _write_split(groups: dict):
@@ -1620,30 +1695,25 @@ def main():
     def _split_by_url(result_list: list) -> dict:
         """Group a list of results by distinct original URL, preventing suffix collisions."""
         groups = {}
-        seen_suffixes = {}  # Tracks which URL owns which suffix
-        
+        seen_suffixes = {}
+
         for r in result_list:
             orig = r.get("original", "")
             if not orig:
                 continue
-                
+
             base_suffix = url_to_suffix(orig, cfg["url"])
             suffix = base_suffix
-            
-            # Handle collisions: if suffix is taken by a DIFFERENT url
+
             counter = 2
             while suffix in seen_suffixes and seen_suffixes[suffix] != orig:
                 suffix = f"{base_suffix}_{counter}"
                 counter += 1
-                
+
             seen_suffixes[suffix] = orig
             groups.setdefault(suffix, []).append(r)
-            
-        return groups
 
-    elapsed = time.time() - start_time
-    mins, secs = divmod(int(elapsed), 60)
-    log(f"[Done]   Finished in {mins}m {secs}s")
+        return groups
 
     if cfg["split_output"]:
         any_includes = [f for f in filters_any if not f["negate"]]
@@ -1662,12 +1732,6 @@ def main():
             save_log(cfg["output"])
 
         else:
-            # Token mode:
-            #   filter_any non-wildcard tokens → one merged file per token
-            #   filter_any wildcard tokens     → per distinct URL (pooled)
-            #   filter_all wildcard tokens     → per distinct URL (pooled alongside filter_any wildcards)
-            #     (filter_all is AND-gating so grouping by token is meaningless;
-            #      only the distinct URLs that survived the filter matter)
             groups = {}
             wildcard_bucket = []
 
@@ -1691,15 +1755,10 @@ def main():
                     if suffix not in groups:
                         groups[suffix] = matched
 
-            # filter_all wildcards: if any exist, all results need per-URL split.
-            # (Every result already matched ALL filter_all tokens, so there is no
-            # meaningful per-token grouping — only distinct URLs differ.)
             if any(_is_wildcard_filter(f) for f in all_includes):
                 wildcard_bucket.extend([r for r in results if r and r.get("original")])
 
             if wildcard_bucket:
-                # Deduplicate by object identity — a result can land in the bucket
-                # from multiple wildcard tokens but must only appear in one URL file.
                 seen_ids = set()
                 deduped = []
                 for m in wildcard_bucket:
@@ -1707,8 +1766,6 @@ def main():
                         seen_ids.add(id(m))
                         deduped.append(m)
                 url_groups = _split_by_url(deduped)
-                # Merge URL groups into main groups; resolve any suffix collisions
-                # with existing token-named groups.
                 for u_suffix, u_results in url_groups.items():
                     final_suffix = u_suffix
                     counter = 2
@@ -1735,7 +1792,6 @@ def main():
         write_csv(results, cfg, out_path)
         if cfg["reformat"]:
             reformat_csv(results, cfg, out_path)
-        # Always log to the base output name so all runs append to the same file
         save_log(cfg["output"])
 
 
