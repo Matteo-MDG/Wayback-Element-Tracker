@@ -135,7 +135,7 @@ Show seconds in the time? (`yes` / `no`)
 After each run, a `.log` file is saved alongside the CSV with the same base name (e.g. `wayback_results.log`). Each new program execution is added to the end of the log file, which will track the output up to the last 10 runs.  
 
 `output`  
-CSV file name.
+CSV file name
 
 `file_override`  
 Whether to overwrite the output file(s) if it already exists (`yes` / `no`)  
