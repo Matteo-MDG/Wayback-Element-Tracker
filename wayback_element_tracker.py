@@ -1661,7 +1661,7 @@ def main():
     sample_str = ", ".join(date_parts)
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.5.1")
+    log("  Wayback Element Tracker v1.5.2")
     log("=" * 60)
 
     def _filter_display(filters):
