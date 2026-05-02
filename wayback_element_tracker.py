@@ -240,8 +240,12 @@ def drain_buffer():
             _next_to_print[0] += 1
 
 
-def save_log(output_path: str):
-    log_path = os.path.splitext(output_path)[0] + ".log"
+def save_log(output_path: str, log_dir: str = None):
+    stem = os.path.splitext(os.path.basename(output_path))[0]
+    if log_dir:
+        log_path = os.path.join(log_dir, stem + ".log")
+    else:
+        log_path = os.path.splitext(output_path)[0] + ".log"
     MAX_RUNS = 10
     try:
         # Read existing runs from the log file (runs are separated by blank lines)
@@ -890,6 +894,28 @@ def get_snapshots(cfg: dict) -> list:
                     f"filter(s): {raw_display!r}."
                 )
 
+            # ── Distinct-URL sanity check ─────────────────────────────────
+            distinct_urls = list(dict.fromkeys(s["original"] for s in snapshots))
+            n_distinct = len(distinct_urls)
+            WARN_THRESHOLD = 20
+            if n_distinct > WARN_THRESHOLD:
+                log(f"\n[Warning] Your filter matched {n_distinct} distinct URLs.")
+                log(f"          This may be unintentionally broad (e.g. tracking every")
+                log(f"          sub-ID under a path like /page/1, /page/2, ...).")
+                preview = distinct_urls[:5]
+                for u in preview:
+                    log(f"            {u}")
+                if n_distinct > 5:
+                    log(f"            ... and {n_distinct - 5} more")
+                log(f"")
+                try:
+                    answer = input("  Continue anyway? [Y/N]: ").strip().lower()
+                except EOFError:
+                    answer = "n"
+                if answer not in ("y", "yes"):
+                    sys.exit("[Aborted] Re-check your filter settings and try again.")
+                log(f"")
+
             return snapshots
         except Exception as e:
             if attempt < cfg["retries"]:
@@ -1266,6 +1292,23 @@ def resolve_output_path(path: str, override: bool) -> str:
         counter += 1
 
 
+# ── Output Folder Structure ───────────────────────────────────────────────────
+def get_output_dirs(output: str) -> tuple:
+    """
+    Derive the three output directories from the configured output path.
+
+      base_dir : folder named after the output stem, e.g. 'wayback_results/'
+      raw_dir  : base_dir/raw/      – regular CSV files
+      ref_dir  : base_dir/reformatted/ – reformatted CSV files
+    """
+    parent   = os.path.dirname(output) or "."
+    stem     = os.path.splitext(os.path.basename(output))[0]
+    base_dir = os.path.join(parent, stem)
+    raw_dir  = os.path.join(base_dir, "raw")
+    ref_dir  = os.path.join(base_dir, "reformatted")
+    return base_dir, raw_dir, ref_dir
+
+
 # ── Step 4: Write CSV ─────────────────────────────────────────────────────────
 def write_csv(results: list, cfg: dict, output_path: str) -> None:
     if not results:
@@ -1461,7 +1504,10 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
     n = len(snap_dates)
 
     # ── Write output ──────────────────────────────────────────────────────────
-    ref_path_raw = os.path.splitext(output_path)[0] + "_reformatted.csv"
+    ref_dir = cfg.get("ref_dir", os.path.dirname(output_path) or ".")
+    ref_stem = os.path.splitext(os.path.basename(output_path))[0] + "_reformatted"
+    ref_filename = ref_stem + ".csv"
+    ref_path_raw = os.path.join(ref_dir, ref_filename)
     ref_path = resolve_output_path(ref_path_raw, cfg["file_override"])
     if ref_path != ref_path_raw:
         log(f"[Reformat] '{ref_path_raw}' already exists -- writing to '{ref_path}' instead.")
@@ -1595,6 +1641,15 @@ def main():
     filters_any = cfg["filters_any"]
     filters_all = cfg["filters_all"]
 
+    # ── Set up output folder structure ────────────────────────────────────────
+    base_dir, raw_dir, ref_dir = get_output_dirs(cfg["output"])
+    os.makedirs(raw_dir, exist_ok=True)
+    if cfg["reformat"]:
+        os.makedirs(ref_dir, exist_ok=True)
+    cfg["raw_dir"]  = raw_dir
+    cfg["ref_dir"]  = ref_dir
+    cfg["base_dir"] = base_dir
+
     gap_info = (_format_gap(cfg["min_gap_secs"])
                 if cfg["min_gap_secs"] > 0 else "disabled")
 
@@ -1681,9 +1736,11 @@ def main():
     def _write_split(groups: dict):
         """Write one CSV (+ optional reformat) per group. groups = {suffix: [results]}"""
         log(f"\n[Split]  Writing {len(groups)} output file(s) ...")
-        base, ext = os.path.splitext(cfg["output"])
+        stem = os.path.splitext(os.path.basename(cfg["output"]))[0]
+        ext  = os.path.splitext(cfg["output"])[1]
         for suffix, group_results in groups.items():
-            raw_path = f"{base}_{suffix}{ext}"
+            raw_filename = f"{stem}_{suffix}{ext}"
+            raw_path = os.path.join(cfg["raw_dir"], raw_filename)
             out_path = resolve_output_path(raw_path, cfg["file_override"])
             if out_path != raw_path:
                 log(f"[Split]  '{raw_path}' already exists -- writing to '{out_path}' instead.")
@@ -1724,12 +1781,13 @@ def main():
             groups = _split_by_url([r for r in results if r])
             if len(groups) <= 1:
                 log("[Split]  Only one distinct URL found -- writing single output file.")
-                out_path = resolve_output_path(cfg["output"], cfg["file_override"])
+                raw_filename = os.path.basename(cfg["output"])
+                out_path = resolve_output_path(os.path.join(cfg["raw_dir"], raw_filename), cfg["file_override"])
                 write_csv(results, cfg, out_path)
                 if cfg["reformat"]: reformat_csv(results, cfg, out_path)
             else:
                 _write_split(groups)
-            save_log(cfg["output"])
+            save_log(cfg["output"], cfg["base_dir"])
 
         else:
             groups = {}
@@ -1778,21 +1836,23 @@ def main():
                 _write_split(groups)
             else:
                 log("[Split]  No groups produced -- writing single output file.")
-                out_path = resolve_output_path(cfg["output"], cfg["file_override"])
+                raw_filename = os.path.basename(cfg["output"])
+                out_path = resolve_output_path(os.path.join(cfg["raw_dir"], raw_filename), cfg["file_override"])
                 write_csv(results, cfg, out_path)
                 if cfg["reformat"]: reformat_csv(results, cfg, out_path)
 
-            save_log(cfg["output"])
+            save_log(cfg["output"], cfg["base_dir"])
 
     else:
         # Standard un-split output
-        out_path = resolve_output_path(cfg["output"], cfg["file_override"])
-        if out_path != cfg["output"]:
+        raw_filename = os.path.basename(cfg["output"])
+        out_path = resolve_output_path(os.path.join(cfg["raw_dir"], raw_filename), cfg["file_override"])
+        if out_path != os.path.join(cfg["raw_dir"], raw_filename):
             log(f"[CSV]    '{cfg['output']}' already exists -- writing to '{out_path}' instead.")
         write_csv(results, cfg, out_path)
         if cfg["reformat"]:
             reformat_csv(results, cfg, out_path)
-        save_log(cfg["output"])
+        save_log(cfg["output"], cfg["base_dir"])
 
 
 if __name__ == "__main__":
