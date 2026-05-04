@@ -28,6 +28,7 @@ to_date =
 # --- SNAPSHOT FREQUENCY ----------------------------------------------------------------------------------
 frequency = all
 sample_from = start
+collision_priority = time
 
 # --- DATE & TIME FORMAT ----------------------------------------------------------------------------------
 convention = us
@@ -56,6 +57,7 @@ value_elements =
 sort = alphabet
 zero_fill = no
 fill_first = no
+merged_meta = grouped
 
 # --- ADVANCED --------------------------------------------------------------------------------------------
 min_gap = 0.5

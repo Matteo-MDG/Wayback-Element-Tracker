@@ -576,6 +576,7 @@ to_date =
 # --- SNAPSHOT FREQUENCY ----------------------------------------------------------------------------------
 frequency = all
 sample_from = start
+collision_priority = time
 
 # --- DATE & TIME FORMAT ----------------------------------------------------------------------------------
 convention = us
@@ -604,6 +605,7 @@ value_elements =
 sort = alphabet
 zero_fill = no
 fill_first = no
+merged_meta = grouped
 
 # --- ADVANCED --------------------------------------------------------------------------------------------
 min_gap = 0.5
@@ -645,23 +647,6 @@ def load_settings(path="settings.txt") -> dict:
                 continue
             key, _, value = line.partition("=")
             key = key.strip().lower().replace("-", "_")
-
-            # Accept legacy 'url_variants' as an alias for 'filter_any'
-            if key == "url_variants":
-                key = "filter_any"
-                if value.lower() in ("yes", "true", "1"):
-                    value = "*"
-                elif value.lower() in ("no", "false", "0"):
-                    value = ""
-
-            # Accept legacy 'split_by' as an alias for 'split_output'
-            if key == "split_by":
-                value = "yes" if value.strip().lower() in ("url", "filter", "both") else value
-                key = "split_output"
-
-            # Accept legacy 'end_passes' gracefully (ignored)
-            if key == "end_passes":
-                continue
 
             value = value.strip()
             if key in raw and value:
@@ -839,12 +824,27 @@ def load_settings(path="settings.txt") -> dict:
         "sort": sort,
         "zero_fill": raw["zero_fill"].strip().lower(),
         "fill_first": yesno(raw["fill_first"]),
-        "split_output": yesno(raw["split_output"]),
+        "split_output": raw["split_output"].strip().lower(),
+        "merged_meta": raw["merged_meta"].strip().lower(),
         "match_child_paths": yesno(raw["match_child_paths"]),
+        "collision_priority": "",  # set after validation below
     }
 
     if cfg["zero_fill"] not in ("no", "adjacent", "snapshot"):
         sys.exit("[Error] 'zero_fill' must be 'no', 'adjacent', or 'snapshot'.")
+
+    if cfg["split_output"] not in ("no", "files", "merged"):
+        sys.exit("[Error] 'split_output' must be 'no', 'files', or 'merged'.")
+
+    if cfg["merged_meta"] not in ("interleaved", "grouped"):
+        sys.exit("[Error] 'merged_meta' must be 'interleaved' or 'grouped'.")
+
+    # ── collision_priority validation ───────────────────────────────────────────
+    collision_priority = raw["collision_priority"].strip().lower()
+    if collision_priority not in ("time", "filter"):
+        sys.exit("[Error] 'collision_priority' must be 'time' or 'filter'.")
+    cfg["collision_priority"] = collision_priority
+
     return cfg
 
 
@@ -942,17 +942,42 @@ def _sample_group(snapshots: list, cfg: dict,
     prefer_canonical=False – pure time-distance tiebreaker only (per-URL mode,
                              where all snapshots already share the same URL).
     """
-    frequency    = cfg["frequency"]
-    anchor       = cfg["sample_from"]
-    min_gap_secs = cfg["min_gap_secs"]
-    freq_fmt     = FREQ_MAP.get(frequency)
-    base_url     = cfg["url"]
-    n_fallbacks  = cfg["fallback_candidates"]
+    frequency       = cfg["frequency"]
+    anchor          = cfg["sample_from"]
+    min_gap_secs    = cfg["min_gap_secs"]
+    freq_fmt        = FREQ_MAP.get(frequency)
+    base_url        = cfg["url"]
+    n_fallbacks     = cfg["fallback_candidates"]
+    collision_priority = cfg.get("collision_priority", "time")
+
+    # Build filter-rank map: original_url -> rank (lower = higher priority).
+    # Only populated when collision_priority = 'filter' and we're in single-file
+    # mode (prefer_canonical=True), where multiple URL variants compete.
+    url_filter_rank: dict = {}
+    if collision_priority == "filter" and prefer_canonical:
+        filters_any = cfg.get("filters_any", [])
+        any_includes = [f for f in filters_any if not f["negate"]]
+        for rank, f in enumerate(any_includes):
+            # Walk every snapshot to assign the rank of the first matching token
+            # (snapshots list is available in the outer scope via closure)
+            for snap in snapshots:
+                orig = snap.get("original", "")
+                if orig and orig not in url_filter_rank:
+                    if _single_filter_matches(
+                        orig, f["pattern"], f["mode"],
+                        cfg["case_sensitive"], cfg["match_child_paths"]
+                    ):
+                        url_filter_rank[orig] = rank
 
     def sort_key(s, target):
         time_dist = abs((ts_to_dt(s["timestamp"]) - target).total_seconds())
+        orig = s.get("original", "")
+        if collision_priority == "filter" and prefer_canonical:
+            frank = url_filter_rank.get(orig, 999)
+            return (frank, time_dist)
         if prefer_canonical:
-            is_variant = 0 if s["original"] == base_url else 1
+            # Legacy behaviour: base URL beats variants, then by time
+            is_variant = 0 if orig == base_url else 1
             return (is_variant, time_dist)
         return time_dist
 
@@ -1002,9 +1027,14 @@ def _sample_group(snapshots: list, cfg: dict,
                 prev_dist = abs((ts_to_dt(kept[-1]["timestamp"]) - prev_anchor).total_seconds())
                 curr_dist = abs((curr_dt - curr_anchor).total_seconds())
                 if prefer_canonical:
-                    prev_is_variant = kept[-1]["original"] != base_url
-                    curr_is_variant = snap["original"] != base_url
-                    curr_better = (prev_is_variant, prev_dist) > (curr_is_variant, curr_dist)
+                    if collision_priority == "filter":
+                        prev_frank = url_filter_rank.get(kept[-1].get("original", ""), 999)
+                        curr_frank = url_filter_rank.get(snap.get("original", ""), 999)
+                        curr_better = (prev_frank, prev_dist) > (curr_frank, curr_dist)
+                    else:
+                        prev_is_variant = kept[-1]["original"] != base_url
+                        curr_is_variant = snap["original"] != base_url
+                        curr_better = (prev_is_variant, prev_dist) > (curr_is_variant, curr_dist)
                 else:
                     curr_better = curr_dist < prev_dist
                 if curr_better:
@@ -1048,7 +1078,7 @@ def sample_snapshots(snapshots: list, cfg: dict) -> tuple:
     frequency    = cfg["frequency"]
     anchor       = cfg["sample_from"]
     min_gap_secs = cfg["min_gap_secs"]
-    per_url_mode = cfg["split_output"] and cfg["filter_cdx_wildcard"]
+    per_url_mode = cfg["split_output"] != "no" and cfg["filter_cdx_wildcard"]
 
     if per_url_mode:
         # Sample each distinct URL independently so no URL loses a time bucket
@@ -1310,6 +1340,370 @@ def get_output_dirs(output: str) -> tuple:
 
 
 # ── Step 4: Write CSV ─────────────────────────────────────────────────────────
+def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
+    """
+    Write all groups into a single CSV file.
+
+    rows layout:
+        Shared date/time header across the top.  For each group, in order:
+          - a blank label row carrying the group suffix as the first cell
+          - url (suffix) row
+          - error (suffix) row
+          - one element row per tracked element, labelled "selector (extract) (suffix)"
+        All rows share the same date columns.
+
+    columns layout:
+        Each group is stacked below the previous, separated by a blank row.
+        A group-label row (suffix in col 0) appears before each block's
+        column-header row, so every block is self-identifying.
+    """
+    if not groups:
+        log("[Merged]  No groups to write.")
+        return
+
+    layout    = cfg["csv_layout"]
+    show_time = cfg["show_time"]
+    elements  = cfg["elements"]
+
+    padded_groups: list = []
+    for suffix, group_results in groups.items():
+        padded_groups.append((suffix, apply_padding(group_results, cfg)))
+
+    if layout == "rows":
+        # Build unified sorted date list
+        all_dates: list = []
+        seen_dates: set = set()
+        for _, g_results in padded_groups:
+            for r in g_results:
+                d = r["date"] if r else ""
+                if d and d not in seen_dates:
+                    seen_dates.add(d)
+                    all_dates.append((r["timestamp"] if r else "", d))
+        all_dates.sort(key=lambda x: x[0])
+        date_order = [d for _, d in all_dates]
+
+        def group_lookup(g_results):
+            return {r["date"]: r for r in g_results if r and r.get("date")}
+
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+
+            writer.writerow(["date"] + date_order)
+            if show_time:
+                lookups = [group_lookup(g) for _, g in padded_groups]
+                time_row = ["time"]
+                for d in date_order:
+                    val = next((lk[d]["time"] for lk in lookups if d in lk), "")
+                    time_row.append(val)
+                writer.writerow(time_row)
+
+            for suffix, g_results in padded_groups:
+                lk = group_lookup(g_results)
+
+                # Group label row (suffix in col 0, rest blank)
+                writer.writerow([suffix])
+
+                # url and error labelled with suffix
+                writer.writerow([f"url ({suffix})"] +
+                                 [lk[d]["url"]   if d in lk else "" for d in date_order])
+                writer.writerow([f"error ({suffix})"] +
+                                 [lk[d]["error"] if d in lk else "" for d in date_order])
+
+                # Element rows
+                max_per_slot = {}
+                for elem in elements:
+                    slot = elem["slot"]
+                    max_per_slot[slot] = max(
+                        (len(r["elem_values"].get(slot, [])) for r in g_results if r),
+                        default=1
+                    )
+                    max_per_slot[slot] = max(max_per_slot[slot], 1)
+
+                for elem in elements:
+                    slot  = elem["slot"]
+                    sel   = elem["selector"]
+                    ext   = elem["extract"]
+                    count = max_per_slot[slot]
+                    for i in range(count):
+                        base_label = (f"{sel} ({ext})" if count == 1
+                                      else f"{sel} [{i+1}] ({ext})")
+                        row_label = f"{base_label} ({suffix})"
+                        row = [row_label]
+                        for d in date_order:
+                            r    = lk.get(d)
+                            vals = r["elem_values"].get(slot, []) if r else []
+                            row.append(vals[i] if i < len(vals) else "")
+                        writer.writerow(row)
+
+    else:  # columns: stack groups vertically
+        with open(output_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            first = True
+            for suffix, g_results in padded_groups:
+                if not first:
+                    writer.writerow([])
+                first = False
+
+                descriptors = []
+                descriptors.append(("date", lambda r, _=None: [r["date"]]))
+                if show_time:
+                    descriptors.append(("time", lambda r, _=None: [r["time"]]))
+
+                max_per_slot = {}
+                for elem in elements:
+                    slot = elem["slot"]
+                    max_per_slot[slot] = max(
+                        (len(r["elem_values"].get(slot, [])) for r in g_results if r),
+                        default=1
+                    )
+                    max_per_slot[slot] = max(max_per_slot[slot], 1)
+
+                for elem in elements:
+                    slot  = elem["slot"]
+                    sel   = elem["selector"]
+                    ext   = elem["extract"]
+                    count = max_per_slot[slot]
+                    label_base = f"{sel} ({ext})"
+                    if count == 1:
+                        def make_fn(s):
+                            return lambda r: r["elem_values"].get(s, [""])[:1] or [""]
+                        descriptors.append((label_base, make_fn(slot)))
+                    else:
+                        for i in range(count):
+                            lbl = f"{sel} [{i+1}] ({ext})"
+                            def make_fn(s, idx):
+                                return lambda r: [(r["elem_values"].get(s, []) + [""] * (idx + 1))[idx]]
+                            descriptors.append((lbl, make_fn(slot, i)))
+
+                descriptors.append((f"url ({suffix})",   lambda r, _=None: [r["url"]]))
+                descriptors.append((f"error ({suffix})", lambda r, _=None: [r["error"]]))
+
+                # Group label row then column headers
+                writer.writerow([suffix] + [""] * (len(descriptors) - 1))
+                writer.writerow([label for label, _ in descriptors])
+                for r in g_results:
+                    writer.writerow([fn(r)[0] for _, fn in descriptors])
+
+    total = sum(len(g) for _, g in padded_groups)
+    log(f"\n[Merged]  Saved {total} total snapshots ({len(padded_groups)} group(s))"
+        f" -> {os.path.abspath(output_path)}")
+
+
+def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
+    """
+    Write a merged reformatted CSV for all groups into one file.
+
+    rows layout:
+        Shared date/time header.  Then, depending on merged_meta:
+          interleaved : for each group — group-label row, url row, error row,
+                        then that group's data rows — all in one pass.
+          grouped     : all groups' data rows first (each preceded by its
+                        group-label row), then all url rows, then all error
+                        rows, at the bottom.  url/error rows are labelled
+                        "url (suffix)" / "error (suffix)".
+
+    columns layout:
+        Groups stacked vertically with blank separator.  Each block starts
+        with a group-label row, then date/time, then depending on merged_meta:
+          interleaved : url, error, then data rows.
+          grouped     : data rows, then url, then error at the bottom of the block.
+        url/error rows are labelled "url (suffix)" / "error (suffix)".
+    """
+    if not groups:
+        return
+
+    layout      = cfg["csv_layout"]
+    show_time   = cfg["show_time"]
+    zero_fill   = cfg["zero_fill"]
+    fill_first  = cfg["fill_first"]
+    pairs       = cfg["reformat_pairs"]
+    sort_mode   = cfg["sort"]
+    merged_meta = cfg.get("merged_meta", "grouped")
+    tracked_slots = {e["slot"] for e in cfg["elements"]}
+
+    ref_dir      = cfg.get("ref_dir", os.path.dirname(output_path) or ".")
+    ref_stem     = os.path.splitext(os.path.basename(output_path))[0] + "_reformatted"
+    ref_path_raw = os.path.join(ref_dir, ref_stem + ".csv")
+    ref_path     = resolve_output_path(ref_path_raw, cfg["file_override"])
+    if ref_path != ref_path_raw:
+        log(f"[Reformat] '{ref_path_raw}' already exists -- writing to '{ref_path}' instead.")
+
+    for label_slot, value_slot in pairs:
+        if label_slot not in tracked_slots or value_slot not in tracked_slots:
+            log(f"[Reformat] Skipping merged reformat: required slot not tracked.")
+            return
+
+    def build_group_data(g_results):
+        g_results = apply_padding(g_results, cfg)
+        snap_dates  = [r["date"]  if r else "" for r in g_results]
+        snap_times  = [r["time"]  if r else "" for r in g_results]
+        snap_urls   = [r["url"]   if r else "" for r in g_results]
+        snap_errors = [r["error"] if r else "" for r in g_results]
+
+        pair_data = []
+        for label_slot, value_slot in pairs:
+            seen_labels, seen_set = [], set()
+            for r in g_results:
+                if not r: continue
+                for lbl in r["elem_values"].get(label_slot, []):
+                    if lbl and lbl not in seen_set:
+                        seen_labels.append(lbl); seen_set.add(lbl)
+            if sort_mode == "alphabet":
+                ordered = sorted(seen_labels, key=lambda x: x.lower())
+            elif sort_mode == "reverse":
+                ordered = sorted(seen_labels, key=lambda x: x.lower(), reverse=True)
+            else:
+                ordered = seen_labels
+            snap_maps = []
+            for r in g_results:
+                if not r: snap_maps.append({}); continue
+                lbls = r["elem_values"].get(label_slot, [])
+                vals = r["elem_values"].get(value_slot, [])
+                snap_maps.append({lbls[i]: vals[i] if i < len(vals) else ""
+                                  for i in range(len(lbls))})
+            pair_data.append((ordered, snap_maps))
+
+        zero_cols: dict = {}
+        if zero_fill != "no":
+            for ordered, snap_maps in pair_data:
+                for label in ordered:
+                    first = next((i for i, m in enumerate(snap_maps) if m.get(label)), None)
+                    if first is None:
+                        zero_cols[label] = None
+                    elif first == 0:
+                        zero_cols[label] = -1 if fill_first else None
+                    else:
+                        zero_cols[label] = (
+                            next((i for i in range(first-1,-1,-1)
+                                  if g_results[i] and g_results[i].get("timestamp")), first-1)
+                            if zero_fill == "snapshot" else first - 1
+                        )
+            if any(v == -1 for v in zero_cols.values()):
+                first_real = next((r for r in g_results if r and r.get("timestamp")), None)
+                if first_real:
+                    prev_dt = prev_period_dt(ts_to_dt(first_real["timestamp"]), cfg["frequency"])
+                    prev_date, prev_time = format_datetime(prev_dt, cfg)
+                else:
+                    prev_date, prev_time = "", ""
+                snap_dates  = [prev_date] + snap_dates
+                snap_times  = [prev_time] + snap_times
+                snap_urls   = [""] + snap_urls
+                snap_errors = [""] + snap_errors
+                pair_data   = [(ol, [{}] + sm) for ol, sm in pair_data]
+                zero_cols   = {lbl: (0 if v == -1 else v+1 if v is not None else None)
+                               for lbl, v in zero_cols.items()}
+
+        return snap_dates, snap_times, snap_urls, snap_errors, pair_data, zero_cols
+
+    group_data = [(suffix, build_group_data(g)) for suffix, g in groups.items()]
+
+    with open(ref_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+
+        if layout == "rows":
+            # Build unified date order from all groups
+            all_date_ts: list = []
+            seen: set = set()
+            for _, (sdates, *_) in group_data:
+                for d in sdates:
+                    if d and d not in seen:
+                        seen.add(d); all_date_ts.append(d)
+            date_order = all_date_ts
+
+            writer.writerow(["date"] + date_order)
+            if show_time:
+                time_lookup: dict = {}
+                for _, (sdates, stimes, *_) in group_data:
+                    for d, t in zip(sdates, stimes):
+                        if d and d not in time_lookup:
+                            time_lookup[d] = t
+                writer.writerow(["time"] + [time_lookup.get(d, "") for d in date_order])
+
+            if merged_meta == "interleaved":
+                # Per group: label, url, error, then data rows
+                for suffix, (sdates, _, surls, serrs, pdata, zero_cols) in group_data:
+                    date_idx = {d: i for i, d in enumerate(sdates)}
+                    writer.writerow([suffix])
+                    writer.writerow([f"url ({suffix})"] +
+                                    [surls[date_idx[d]] if d in date_idx else "" for d in date_order])
+                    writer.writerow([f"error ({suffix})"] +
+                                    [serrs[date_idx[d]] if d in date_idx else "" for d in date_order])
+                    for ordered, snap_maps in pdata:
+                        for label in ordered:
+                            zc  = zero_cols.get(label) if zero_fill != "no" else None
+                            row = []
+                            for d in date_order:
+                                if d in date_idx:
+                                    i = date_idx[d]
+                                    row.append("0" if zc is not None and i == zc
+                                               else snap_maps[i].get(label, ""))
+                                else:
+                                    row.append("")
+                            writer.writerow([f"{label} ({suffix})"] + row)
+
+            else:  # grouped: all data first, then all urls, then all errors
+                for suffix, (sdates, _, surls, serrs, pdata, zero_cols) in group_data:
+                    date_idx = {d: i for i, d in enumerate(sdates)}
+                    writer.writerow([suffix])
+                    for ordered, snap_maps in pdata:
+                        for label in ordered:
+                            zc  = zero_cols.get(label) if zero_fill != "no" else None
+                            row = []
+                            for d in date_order:
+                                if d in date_idx:
+                                    i = date_idx[d]
+                                    row.append("0" if zc is not None and i == zc
+                                               else snap_maps[i].get(label, ""))
+                                else:
+                                    row.append("")
+                            writer.writerow([f"{label} ({suffix})"] + row)
+
+                writer.writerow([])  # blank separator before meta rows
+                for suffix, (sdates, _, surls, serrs, *_) in group_data:
+                    date_idx = {d: i for i, d in enumerate(sdates)}
+                    writer.writerow([f"url ({suffix})"] +
+                                    [surls[date_idx[d]] if d in date_idx else "" for d in date_order])
+                for suffix, (sdates, _, surls, serrs, *_) in group_data:
+                    date_idx = {d: i for i, d in enumerate(sdates)}
+                    writer.writerow([f"error ({suffix})"] +
+                                    [serrs[date_idx[d]] if d in date_idx else "" for d in date_order])
+
+        else:  # columns: stack each group's block vertically
+            first_block = True
+            for suffix, (sdates, stimes, surls, serrs, pdata, zero_cols) in group_data:
+                if not first_block:
+                    writer.writerow([])
+                first_block = False
+                n = len(sdates)
+
+                def data_rows():
+                    for ordered, snap_maps in pdata:
+                        for label in ordered:
+                            zc  = zero_cols.get(label) if zero_fill != "no" else None
+                            row = []
+                            for i in range(n):
+                                row.append("0" if zc is not None and i == zc
+                                           else snap_maps[i].get(label, ""))
+                            writer.writerow([label] + row)
+
+                # Group label + date/time always first
+                writer.writerow([suffix])
+                writer.writerow(["date"] + sdates)
+                if show_time:
+                    writer.writerow(["time"] + stimes)
+
+                if merged_meta == "interleaved":
+                    writer.writerow([f"url ({suffix})"]   + surls)
+                    writer.writerow([f"error ({suffix})"] + serrs)
+                    data_rows()
+                else:  # grouped: data then meta at bottom of block
+                    data_rows()
+                    writer.writerow([f"url ({suffix})"]   + surls)
+                    writer.writerow([f"error ({suffix})"] + serrs)
+
+    log(f"[Reformat] Saved merged reformatted CSV -> {os.path.abspath(ref_path)}")
+
+
 def write_csv(results: list, cfg: dict, output_path: str) -> None:
     if not results:
         log("[CSV]    No results to write.")
@@ -1661,7 +2055,7 @@ def main():
     sample_str = ", ".join(date_parts)
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.5.2")
+    log("  Wayback Element Tracker v1.6.0")
     log("=" * 60)
 
     def _filter_display(filters):
@@ -1707,8 +2101,8 @@ def main():
     if cfg["reformat"]:
         pairs_str = "  ".join(f"{ls}->{vs}" for ls, vs in cfg["reformat_pairs"])
         log(f"  Reformat   : yes  |  pairs: {pairs_str}  |  sort: {cfg['sort']}")
-    if cfg["split_output"]:
-        log(f"  Split out  : yes")
+    if cfg["split_output"] != "no":
+        log(f"  Split out  : {cfg['split_output']}")
     log("=" * 60)
 
     snapshots = get_snapshots(cfg)
@@ -1749,6 +2143,18 @@ def main():
             if cfg["reformat"]:
                 reformat_csv(group_results, cfg, out_path)
 
+    def _write_merged(groups: dict):
+        """Write all groups into a single merged CSV (+ optional reformat)."""
+        log(f"\n[Merged]  Writing {len(groups)} group(s) into single file ...")
+        raw_filename = os.path.basename(cfg["output"])
+        raw_path = os.path.join(cfg["raw_dir"], raw_filename)
+        out_path = resolve_output_path(raw_path, cfg["file_override"])
+        if out_path != raw_path:
+            log(f"[Merged]  '{raw_path}' already exists -- writing to '{out_path}' instead.")
+        write_merged_csv(groups, cfg, out_path)
+        if cfg["reformat"]:
+            reformat_merged_csv(groups, cfg, out_path)
+
     def _split_by_url(result_list: list) -> dict:
         """Group a list of results by distinct original URL, preventing suffix collisions."""
         groups = {}
@@ -1772,7 +2178,8 @@ def main():
 
         return groups
 
-    if cfg["split_output"]:
+    if cfg["split_output"] != "no":
+        dispatch = _write_split if cfg["split_output"] == "files" else _write_merged
         any_includes = [f for f in filters_any if not f["negate"]]
         all_includes = [f for f in filters_all if not f["negate"]]
 
@@ -1780,13 +2187,13 @@ def main():
             # No include tokens at all — split by distinct URL
             groups = _split_by_url([r for r in results if r])
             if len(groups) <= 1:
-                log("[Split]  Only one distinct URL found -- writing single output file.")
+                log(f"[Split]  Only one distinct URL found -- writing single output file.")
                 raw_filename = os.path.basename(cfg["output"])
                 out_path = resolve_output_path(os.path.join(cfg["raw_dir"], raw_filename), cfg["file_override"])
                 write_csv(results, cfg, out_path)
                 if cfg["reformat"]: reformat_csv(results, cfg, out_path)
             else:
-                _write_split(groups)
+                dispatch(groups)
             save_log(cfg["output"], cfg["base_dir"])
 
         else:
@@ -1833,7 +2240,7 @@ def main():
                     groups[final_suffix] = u_results
 
             if groups:
-                _write_split(groups)
+                dispatch(groups)
             else:
                 log("[Split]  No groups produced -- writing single output file.")
                 raw_filename = os.path.basename(cfg["output"])

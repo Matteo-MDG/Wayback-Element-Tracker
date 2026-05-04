@@ -98,6 +98,12 @@ Which snapshot to pick within each frequency period:
 &nbsp; &nbsp; &nbsp;`middle` -> the snapshot closest to the MIDDLE of the period  
 &nbsp; &nbsp; &nbsp;`end` &nbsp; &nbsp; &nbsp;->  the snapshot closest to the END of the period  
 Has no effect when `frequency = all`.
+
+`collision_priority`  
+When multiple URL variants have snapshots in the same time period, determines which one is preferred:  
+&nbsp; &nbsp; &nbsp;`time` &nbsp; &nbsp; ->  the variant whose timestamp is closest to the `sample_from` anchor wins  
+&nbsp; &nbsp; &nbsp;`filter` -> earlier listed `filter_any` filters take priority over later ones  
+Has no effect when no URL variants are tracked, or when `split_output = files`.
 <br>
 <br>
 ### DATE & TIME FORMAT
@@ -149,7 +155,7 @@ e.g `wayback_results.csv` -> `wayback_results_1.csv` -> `wayback_results_2.csv` 
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `date` | `Jan 1` | `Feb 1` | ...   
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `elem` | `value` | `value` | ...
 
-The `url` column contains the full Wayback Machine URL of each snapshot URL.  
+The `url` column contains the full Wayback Machine URL of each snapshot.  
 The `error` column is blank on success, or contains the failure reason (e.g. `timeout`, `HTTP 404`). 
 
 `padding`  
@@ -161,17 +167,18 @@ Insert blank rows/columns in the CSV file for time periods that had no archived 
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;`value` | `value` | ...  
 Has no effect when `frequency = all`.
 
-`split_output`  
-Write a separate output file per URL filter group instead of one combined file (`yes` / `no`)  
-When enabled, `filter_any` follows this structure:  
-&nbsp; &nbsp; &nbsp;filters such as `/subpage`, `sort=new` have all matching variants merged into their respective files  
-&nbsp; &nbsp; &nbsp;substring filters (e.g. `/subpage*`, `*`) have one file per distinct URL matched by that filter  
+`split_output`    
+&nbsp; &nbsp; &nbsp;`no` &nbsp; &nbsp; &nbsp; &nbsp; -> all variants written into one file, collisions resolved by `collision_priority`  
+&nbsp; &nbsp; &nbsp;`files` &nbsp; &nbsp;-> one output file per URL variant or filter  
+&nbsp; &nbsp; &nbsp;`merged` &nbsp;-> one output file containing all filter groups separately  
 
-When enabled, if `filter_all` contains substring filters, those also have one file per distinct URL. `filter_all` is not used in cases such as `/subpage` `sort=new` since its logic means every result already matched both filters.
+When `split_output = files` or `split_output = merged`, it follows this structure:  
+&nbsp; &nbsp; &nbsp;Filters such as `/subpage`, `sort=new` have all matching variants merged into their respective groups  
+&nbsp; &nbsp; &nbsp;Substring filters (e.g. `/subpage*`, `*`) produce one group per distinct URL matched by that filter  
+&nbsp; &nbsp; &nbsp;When `filter_all` contains substring filters, those also produce one group per distinct URL.  
+&nbsp; &nbsp; &nbsp;`filter_all` is not used in cases such as `/subpage` `sort=new` since its logic means every result already matched both filters.  
+&nbsp; &nbsp; &nbsp;When either has only `!` filters, the split falls back to one file per distinct URL.
 
-When neither has only `!` filters, the split falls back to one file per distinct URL.
-<br>
-<br>
 `show_month`  
 Show the month in the output CSV? (`yes` / `no`)
 
@@ -218,8 +225,13 @@ When a label first appears partway through the timeline, places a `0` before its
 &nbsp; &nbsp; &nbsp;`adjacent` -> places `0` in the cell DIRECTLY before the first value  
 &nbsp; &nbsp; &nbsp;`snapshot` -> places `0` in the SNAPSHOT before the first value (only effective when `padding` enabled)
 
-`fill_first`   
-Also place a `0` before labels whose first value appears at the very start of the timeline. (`yes` / `no`) 
+`fill_first`  
+Also place a `0` before labels whose first value appears at the very start of the timeline. (`yes` / `no`)
+
+`merged_meta`  
+Controls where snapshot URLs and errors appear in the reformatted file when `split_output = merged`. Has no effect otherwise.  
+&nbsp; &nbsp; &nbsp;`grouped` &nbsp; &nbsp; &nbsp; &nbsp;-> all data rows for all groups appear first, then all `url (suffix)` rows, then all `error (suffix)` rows at the bottom  
+&nbsp; &nbsp; &nbsp;`interleaved` -> each filter has a group label, then `url (suffix)`, `error (suffix)`, then that filter's data rows
 <br>
 <br>
 ### ADVANCED
