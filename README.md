@@ -173,11 +173,13 @@ Has no effect when `frequency = all`.
 &nbsp; &nbsp; &nbsp;`merged` &nbsp;-> one output file containing all filter groups separately  
 
 When `split_output = files` or `split_output = merged`, it follows this structure:  
-&nbsp; &nbsp; &nbsp;Filters such as `/subpage`, `sort=new` have all matching variants merged into their respective groups  
+`filter_any`  
 &nbsp; &nbsp; &nbsp;Substring filters (e.g. `/subpage*`, `*`) produce one group per distinct URL matched by that filter  
-&nbsp; &nbsp; &nbsp;When `filter_all` contains substring filters, those also produce one group per distinct URL.  
-&nbsp; &nbsp; &nbsp;`filter_all` is not used in cases such as `/subpage` `sort=new` since its logic means every result already matched both filters.  
-&nbsp; &nbsp; &nbsp;When either has only `!` filters, the split falls back to one file per distinct URL.
+&nbsp; &nbsp; &nbsp;Non substring filters (e.g. `/subpage`, `sort=new)` have all matching variants merged into their respective groups  
+`filter_all`  
+&nbsp; &nbsp; &nbsp;Substring filters also produce one group per distinct URL.  
+&nbsp; &nbsp; &nbsp;`filter_all` is not used in non substring cases since its logic means every result already matched both filters.  
+When either field has only `!` filters, the split falls back to one file per distinct URL.
 
 `show_month`  
 Show the month in the output CSV? (`yes` / `no`)
