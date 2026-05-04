@@ -605,7 +605,7 @@ value_elements =
 sort = alphabet
 zero_fill = no
 fill_first = no
-merged_meta = grouped
+merged_meta = interleaved
 
 # --- ADVANCED --------------------------------------------------------------------------------------------
 min_gap = 0.5
@@ -2055,7 +2055,7 @@ def main():
     sample_str = ", ".join(date_parts)
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.6.0")
+    log("  Wayback Element Tracker v1.6.1")
     log("=" * 60)
 
     def _filter_display(filters):

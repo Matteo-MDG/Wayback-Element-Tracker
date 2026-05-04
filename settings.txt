@@ -57,7 +57,7 @@ value_elements =
 sort = alphabet
 zero_fill = no
 fill_first = no
-merged_meta = grouped
+merged_meta = interleaved
 
 # --- ADVANCED --------------------------------------------------------------------------------------------
 min_gap = 0.5
