@@ -241,22 +241,11 @@ Controls where snapshot URLs and errors appear in the reformatted file when `spl
 <br>
 <br>
 ### FETCH MODE
-
 `headless_browser`  
-Controls how each snapshot is fetched. (`yes` / `no`)
+Use a headless Chromium browser to fetch every snapshot instead of a plain HTTP request. (`yes` / `no`)  
+Enable this when the regular fetch consistently returns blank or missing values that are visible when loading the page in a real browser.  This executes each page's JavaScript fully before extracting elements, which is needed when a site populates element content with Javascript.  
 
-**Default (`no`) — plain HTTP request**  
-Sends a direct HTTP request and parses the raw HTML response. Fast, lightweight, and reliable for most sites. Use this unless values are missing (see below).
-
-**Headless browser (`yes`) — Chromium**  
-Launches a real Chromium browser and fully executes the page's JavaScript before extracting elements. Use this when the default mode consistently returns blank or missing values that are visible when loading the page in a normal browser. This is needed when a site populates element content via JavaScript after the initial page load.
-
-Note: significantly slower and more resource intensive than the default. Each snapshot requires a full browser page load, so runs take considerably longer. If the relevant JavaScript API calls were not archived at the time of the snapshot, it falls back to the live API and returns current data instead of historical data. Chromium (~300MB) is downloaded automatically on first use.
-
-**Threads in headless mode**  
-The `threads` setting works differently depending on the fetch mode:  
-&nbsp; &nbsp; &nbsp;Default mode &nbsp; &nbsp; -> threads fetch in parallel, giving near-linear speedup  
-&nbsp; &nbsp; &nbsp;Headless mode -> each thread runs its own Chromium instance; more threads means more CPU and memory usage, and a higher chance of rate limiting from the Wayback Machine. `2` or `3` threads is recommended.
+Note: significantly slower and resoruce intensive than the default method. If the relevant Javascript API calls were not archived at the time of the snapshot, it falls back to the live API and returns current data instead of historical data. Chromium (~300MB) is downloaded automatically on first use. If noticing a lot of failed snapshot requests, lower the `threads` count to `1` or `2`
 <br>
 <br>
 ### ADVANCED
@@ -281,4 +270,4 @@ When a snapshot fails, how many closest snapshots from the same time period to t
 Has no effect when `frequency = all`.
 
 `threads`  
-Number of parallel threads for fetching snapshots. See **FETCH MODE** for how this interacts with `headless_browser`.
+Number of parallel threads for fetching snapshots.
