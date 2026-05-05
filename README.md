@@ -243,6 +243,7 @@ Controls where snapshot URLs and errors appear in the reformatted file when `spl
 ### FETCH MODE
 `headless_browser`  
 Use a headless Chromium browser to fetch every snapshot instead of a plain HTTP request. (`yes` / `no`)  
+
 Enable this when the regular fetch consistently returns blank or missing values that are visible when loading the page in a real browser.  This executes each page's JavaScript fully before extracting elements, which is needed when a site populates element content with Javascript.  
 
 Note: significantly slower and resoruce intensive than the default method. If the relevant Javascript API calls were not archived at the time of the snapshot, it falls back to the live API and returns current data instead of historical data. Chromium (~300MB) is downloaded automatically on first use. If noticing a lot of failed snapshot requests, lower the `threads` count to `1` or `2`
