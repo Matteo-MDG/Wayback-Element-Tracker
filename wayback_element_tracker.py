@@ -1,3 +1,4 @@
+import atexit
 import csv
 import re
 import sys
@@ -13,6 +14,9 @@ from urllib.parse import urlparse, parse_qs, unquote
 
 import requests
 from bs4 import BeautifulSoup
+
+# Playwright is optional — imported lazily when headless_browser = yes
+_playwright_available = None  # None = not yet checked
 
 # ── Constants ────────────────────────────────────────────────────────────────
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -490,7 +494,7 @@ def iter_periods(from_dt: datetime, to_dt: datetime, frequency: str):
     """
     Yield the start datetime of every period bucket from from_dt's bucket
     through to_dt's bucket (inclusive), advancing by one period each step.
-    Used by padding to enumerate gaps.
+    Used by result_padding to enumerate gaps.
     """
     if frequency == "yearly":
         current = datetime(from_dt.year, 1, 1)
@@ -591,7 +595,7 @@ show_seconds = no
 output = wayback_results
 file_override = yes
 csv_layout = rows
-padding = no
+result_padding = no
 split_output = no
 show_month = yes
 show_day = yes
@@ -611,8 +615,9 @@ merged_meta = interleaved
 min_gap = 0.5
 delay = 10
 retries = 5
-fallback_candidates = 2
+fallback_candidates = 1
 threads = 3
+headless_browser = no
 """
 
 
@@ -804,7 +809,7 @@ def load_settings(path="settings.txt") -> dict:
         "show_year": yesno(raw["show_year"]),
         "show_time": yesno(raw["show_time"]),
         "csv_layout": raw["csv_layout"].lower(),
-        "padding": yesno(raw["padding"]),
+        "result_padding": yesno(raw["result_padding"]),
         "filter_any_raw": raw["filter_any"],
         "filter_all_raw": raw["filter_all"],
         "filter_cdx_wildcard": cdx_wildcard,
@@ -819,6 +824,7 @@ def load_settings(path="settings.txt") -> dict:
         "retries": int(raw["retries"]),
         "fallback_candidates": fallback_candidates,
         "threads": threads,
+        "headless_browser": yesno(raw["headless_browser"]),
         "reformat": do_reformat,
         "reformat_pairs": reformat_pairs,
         "sort": sort,
@@ -1120,6 +1126,149 @@ def sample_snapshots(snapshots: list, cfg: dict) -> tuple:
 
 
 # ── Step 3: Fetch One Snapshot ────────────────────────────────────────────────
+def _check_playwright():
+    """Exit with a helpful message if the playwright package is not installed."""
+    global _playwright_available
+    if _playwright_available is not None:
+        return
+    try:
+        from playwright.sync_api import sync_playwright  # noqa: F401
+        _playwright_available = True
+    except ImportError:
+        sys.exit(
+            "[Error] 'headless_browser = yes' requires Playwright.\n"
+            "        Install it with:\n"
+            "          pip install playwright"
+        )
+
+
+# Playwright browser runs in a single dedicated thread. All fetch requests are
+# submitted via _browser_queue and results returned through per-request Futures.
+# This avoids the greenlet thread-affinity crash that occurs when Playwright's
+# sync API is called from multiple ThreadPoolExecutor worker threads.
+import queue as _queue
+import concurrent.futures as _cf
+
+_pw_lock             = threading.Lock()
+_browser_queue       = _queue.Queue()
+_browser_threads     = []
+_browsers_ready      = 0
+_browsers_ready_lock = threading.Lock()
+_all_browsers_ready  = threading.Event()
+_browser_error       = None   # set if any browser thread fails to start
+_expected_browsers   = 0
+
+
+def _browser_worker():
+    """Runs in a dedicated thread. Owns its own Playwright + Chromium lifecycle."""
+    global _browser_error
+    try:
+        from playwright.sync_api import sync_playwright
+        pw = sync_playwright().__enter__()
+        try:
+            browser = pw.chromium.launch(headless=True)
+        except Exception as e:
+            if "Executable doesn't exist" in str(e):
+                log("[Setup]  Chromium not found -- downloading via 'playwright install chromium' ...")
+                import subprocess
+                result = subprocess.run(
+                    [sys.executable, "-m", "playwright", "install", "chromium"],
+                    capture_output=True, text=True,
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"'playwright install chromium' failed:\n{result.stderr.strip()}"
+                    )
+                log("[Setup]  Chromium installed successfully.")
+                browser = pw.chromium.launch(headless=True)
+            else:
+                raise
+        with _browsers_ready_lock:
+            global _browsers_ready
+            _browsers_ready += 1
+            if _browsers_ready >= _expected_browsers:
+                _all_browsers_ready.set()
+    except Exception as e:
+        _browser_error = e
+        _all_browsers_ready.set()
+        return
+
+    while True:
+        item = _browser_queue.get()
+        if item is None:          # shutdown signal
+            break
+        wayback_url, future = item
+        try:
+            page = browser.new_page()
+            try:
+                page.route(
+                    "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,otf,eot}",
+                    lambda route, _: route.abort(),
+                )
+                # Wait for the page load event first (reliable), then give JS
+                # up to 10 extra seconds to finish its API calls. If networkidle
+                # doesn't happen in time we proceed anyway — the element may
+                # already be populated.
+                resp = page.goto(wayback_url, wait_until="load", timeout=30_000)
+                if resp is None or not resp.ok:
+                    status = resp.status if resp else "no response"
+                    raise RuntimeError(f"HTTP {status}")
+                try:
+                    page.wait_for_load_state("networkidle", timeout=10_000)
+                except Exception:
+                    pass  # proceed with whatever JS has run so far
+                future.set_result(page.content())
+            except Exception as e:
+                future.set_exception(e)
+            finally:
+                page.close()
+        except Exception as e:
+            if not future.done():
+                future.set_exception(e)
+
+    try:
+        browser.close()
+        pw.__exit__(None, None, None)
+    except Exception:
+        pass
+
+
+def _get_browser(n: int = 1):
+    """Start n dedicated browser threads if not already running, then wait for all to be ready."""
+    global _expected_browsers
+    with _pw_lock:
+        if not _browser_threads:
+            _expected_browsers = n
+            for _ in range(n):
+                t = threading.Thread(
+                    target=_browser_worker, daemon=True, name="playwright-browser"
+                )
+                t.start()
+                _browser_threads.append(t)
+    _all_browsers_ready.wait()
+    if _browser_error:
+        sys.exit(f"[Error]  Failed to launch Chromium: {_browser_error}")
+
+
+def _close_browser():
+    """Shut down all browser threads cleanly."""
+    for t in _browser_threads:
+        if t.is_alive():
+            _browser_queue.put(None)   # one poison pill per thread
+    for t in _browser_threads:
+        t.join(timeout=10)
+
+
+def _fetch_html_playwright(wayback_url: str) -> str:
+    """
+    Submit a fetch job to the browser thread and block until the result is ready.
+    Raises on timeout or navigation failure.
+    """
+    future = _cf.Future()
+    _browser_queue.put((wayback_url, future))
+    return future.result()   # blocks until the browser thread finishes the job
+
+
 def fetch_snapshot(session, index: int, total: int, timestamp: str,
                    original_url: str, cfg: dict, buffered: bool = True,
                    fallbacks: list = None) -> dict:
@@ -1141,6 +1290,10 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
     primary_date_str, primary_time_str = format_datetime(ts_to_dt(timestamp), cfg)
     last_err = ""
 
+    # Accumulates retry/fallback notices so they're bundled into one emit() call,
+    # preventing premature buffer flushes from other threads from orphaning output.
+    extra_lines = []
+
     for cand_idx, candidate in enumerate(candidates):
         curr_ts  = candidate["timestamp"]
         curr_url = candidate["original"]
@@ -1149,21 +1302,31 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
         prefix = f"[{index}/{total}] {date_str} {time_str}".strip()
 
         if cand_idx > 0:
-            log(f"  -> trying fallback {cand_idx}/{len(candidates) - 1}: {curr_ts}")
+            notice = f"  -> trying fallback {cand_idx}/{len(candidates) - 1}: {curr_ts}"
+            if buffered:
+                extra_lines.append(notice)
+            else:
+                log(notice)
 
         hit_definitive = False
 
         for attempt in range(1, cfg["retries"] + 1):
             try:
-                resp = session.get(
-                    wayback_url, timeout=15,
-                    headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
-                )
-                resp.raise_for_status()
+                if cfg["headless_browser"]:
+                    html_text = _fetch_html_playwright(wayback_url)
+                else:
+                    resp = session.get(
+                        wayback_url, timeout=15,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+                    )
+                    resp.raise_for_status()
+                    html_text = resp.text
 
-                soup = BeautifulSoup(resp.text, "lxml")
+                soup = BeautifulSoup(html_text, "lxml")
                 elem_values = {}
                 lines = [prefix]
+                if buffered:
+                    lines.extend(extra_lines)
 
                 for elem in cfg["elements"]:
                     sel_chain = elem["selector_chain"]
@@ -1197,11 +1360,12 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
                     else:
                         values = [v for m in matches
                                   for v in [extract_value(m, extract)] if v]
-                        elem_values[elem["slot"]] = values
                         if values:
+                            elem_values[elem["slot"]] = values
                             lines.append(f"{label}: {', '.join(values)}")
                         else:
-                            lines.append(f"{label}: (no value)")
+                            elem_values[elem["slot"]] = []
+                            lines.append(f"{label}: (blank)")
 
                 emit(index, "\n".join(lines))
                 return {
@@ -1221,17 +1385,33 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
                 if e.response.status_code in (404, 403):
                     hit_definitive = True
                     break   # skip remaining retries, move to next candidate
+            except RuntimeError as e:
+                # Normalise browser errors to match HTTP mode formatting
+                raw_err = str(e).splitlines()[0]
+                if "timeout" in raw_err.lower():
+                    last_err = "timeout"
+                elif "HTTP" in raw_err:
+                    match = re.search(r'HTTP \d+', raw_err)
+                    last_err = match.group(0) if match else re.sub(r'https?://\S+', '', raw_err).strip()
+                else:
+                    last_err = re.sub(r'https?://\S+', '', raw_err).strip()
+                if "HTTP 404" in last_err or "HTTP 403" in last_err:
+                    hit_definitive = True
+                    break
             except Exception as e:
-                last_err = str(e)
+                # Normalise generic exceptions for consistency
+                raw_err = str(e).splitlines()[0]
+                if "timeout" in raw_err.lower():
+                    last_err = "timeout"
+                else:
+                    last_err = re.sub(r'https?://\S+', '', raw_err).strip()
 
             if attempt < cfg["retries"] and not hit_definitive:
-                retry_notice = f"\n  -> attempt {attempt}/{cfg['retries']} failed: {last_err} -- retrying ..."
+                retry_notice = f"  -> attempt {attempt}/{cfg['retries']} failed: {last_err} -- retrying ..."
                 if buffered:
-                    with _print_lock:
-                        pending = _print_buffer.get(index, prefix)
-                        _print_buffer[index] = pending + retry_notice
+                    extra_lines.append(retry_notice)
                 else:
-                    log(prefix + retry_notice)
+                    log(f"{prefix}\n{retry_notice}")
                 time.sleep(cfg["delay"])
 
         # Move to next candidate if one exists
@@ -1241,7 +1421,11 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
 
     # All candidates failed — report using the primary snapshot's info
     primary_prefix = f"[{index}/{total}] {primary_date_str} {primary_time_str}".strip()
-    emit(index, f"{primary_prefix} ... failed ({last_err})")
+    if buffered and extra_lines:
+        failure_lines = [primary_prefix] + extra_lines + [f"... failed ({last_err})"]
+        emit(index, "\n".join(failure_lines))
+    else:
+        emit(index, f"{primary_prefix} ... failed ({last_err})")
     return {
         "timestamp": timestamp,
         "date": primary_date_str,
@@ -1256,13 +1440,13 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
 # ── Result Padding ────────────────────────────────────────────────────────────
 def apply_padding(results: list, cfg: dict) -> list:
     """
-    When padding is enabled and a regular frequency is in use, return a
+    When result_padding is enabled and a regular frequency is in use, return a
     new list that inserts blank entries for every period bucket that had no valid
     snapshot, so the output spans every period continuously between the first and
-    last result. Returns the original list unchanged if padding is not applicable.
+    last result. Returns the original list unchanged if result_padding is not applicable.
     """
     frequency = cfg["frequency"]
-    if not cfg["padding"] or frequency == "all":
+    if not cfg["result_padding"] or frequency == "all":
         return results
 
     freq_fmt = FREQ_MAP[frequency]
@@ -1960,7 +2144,7 @@ def run_pass(indices: list, snapshots: list, results: list,
         if cfg["threads"] > 1:
             futures = {}
             with ThreadPoolExecutor(max_workers=cfg["threads"]) as executor:
-                for i in indices:
+                for idx, i in enumerate(indices):
                     snap = snapshots[i]
                     fut = executor.submit(
                         fetch_snapshot, session,
@@ -1969,6 +2153,11 @@ def run_pass(indices: list, snapshots: list, results: list,
                         fallbacks_map.get(snap["timestamp"]),
                     )
                     futures[fut] = i
+                    # In headless mode, stagger the first `threads` submissions so
+                    # browsers don't all hit the Wayback Machine simultaneously,
+                    # which tends to trigger rate limiting.
+                    if cfg["headless_browser"] and idx < cfg["threads"] - 1:
+                        time.sleep(cfg["delay"])
                 for fut in as_completed(futures):
                     i = futures[fut]
                     result = fut.result()
@@ -2055,7 +2244,7 @@ def main():
     sample_str = ", ".join(date_parts)
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.6.1")
+    log("  Wayback Element Tracker v1.7.0")
     log("=" * 60)
 
     def _filter_display(filters):
@@ -2093,7 +2282,7 @@ def main():
     log(f"  Frequency  : {cfg['frequency']}  |  anchor: {cfg['sample_from']}  |  min gap: {gap_info}")
     log(f"  Format     : {sample_str}")
     log(f"  Threads    : {cfg['threads']}")
-    log(f"  CSV layout : {cfg['csv_layout']}  |  result padding: {'yes' if cfg['padding'] else 'no'}")
+    log(f"  CSV layout : {cfg['csv_layout']}  |  result padding: {'yes' if cfg['result_padding'] else 'no'}")
     override_str = "yes" if cfg["file_override"] else "no"
     log(f"  Output     : {cfg['output']}  |  override: {override_str}")
     if cfg["fallback_candidates"] > 0:
@@ -2103,7 +2292,11 @@ def main():
         log(f"  Reformat   : yes  |  pairs: {pairs_str}  |  sort: {cfg['sort']}")
     if cfg["split_output"] != "no":
         log(f"  Split out  : {cfg['split_output']}")
+    fetch_mode = "headless Chromium" if cfg["headless_browser"] else "HTTP request"
+    log(f"  Fetch mode : {fetch_mode}")
     log("=" * 60)
+    if cfg["headless_browser"]:
+        _check_playwright()
 
     snapshots = get_snapshots(cfg)
     if not snapshots:
@@ -2113,11 +2306,21 @@ def main():
     total = len(snapshots)
     results = [None] * total
 
-    failed_indices = run_pass(
-        list(range(total)), snapshots, results, total, cfg,
-        buffered=True, fallbacks_map=fallbacks_map,
-    )
-    drain_buffer()
+    if cfg["headless_browser"]:
+        log(f"[Setup]  Launching {cfg['threads']} Chromium instance(s) ...")
+        _get_browser(cfg["threads"])
+        atexit.register(_close_browser)
+        log("[Setup]  Chromium ready.")
+
+    try:
+        failed_indices = run_pass(
+            list(range(total)), snapshots, results, total, cfg,
+            buffered=True, fallbacks_map=fallbacks_map,
+        )
+        drain_buffer()
+    finally:
+        if cfg["headless_browser"]:
+            _close_browser()
 
     if failed_indices:
         log(f"\n[Done]   {len(failed_indices)} snapshot(s) failed after exhausting all fallback candidates.")

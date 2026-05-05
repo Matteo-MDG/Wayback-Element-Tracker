@@ -156,9 +156,13 @@ e.g `wayback_results.csv` -> `wayback_results_1.csv` -> `wayback_results_2.csv` 
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; `elem` | `value` | `value` | ...
 
 The `url` column contains the full Wayback Machine URL of each snapshot.  
-The `error` column is blank on success, or contains the failure reason (e.g. `timeout`, `HTTP 404`). 
+The `error` column is blank on success, or contains the failure reason (e.g. `timeout`, `HTTP 404`).  
 
-`padding`  
+When an element cannot be extracted, its cell in the CSV is left empty. The console output distinguishes two cases:  
+&nbsp; &nbsp; &nbsp;`(no element)` -> the element was not found anywhere on the page  
+&nbsp; &nbsp; &nbsp;`(blank)` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;-> the element was found, but the extracted attribute or text was empty
+
+`result_padding`  
 Insert blank rows/columns in the CSV file for time periods that had no archived snapshots  
 &nbsp; &nbsp; &nbsp;`yes` -> `Jan 1` | `Feb 1` | `Mar 1` | ...  
 &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;`value` | &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; &nbsp;| `value `| ...  
@@ -218,14 +222,14 @@ e.g. for label elements `1` `2` and value elements `3` `4`, elements `1` and `3`
 `sort`  
 How to order the label rows / columns in the reformatted file:  
 &nbsp; &nbsp; &nbsp;`unsorted` -> labels appear in first-seen order  
-&nbsp; &nbsp; &nbsp;`alphabet` -> alphabetical A-Z (case-insensitive)  
-&nbsp; &nbsp; &nbsp;`reverse` &nbsp; -> alphabetical Z-A (case-insensitive)
+&nbsp; &nbsp; &nbsp;`alphabet` -> alphabetical A-Z (case insensitive)  
+&nbsp; &nbsp; &nbsp;`reverse` &nbsp; -> alphabetical Z-A (case insensitive)
 
 `zero_fill`  
 When a label first appears partway through the timeline, places a `0` before its first value.  
 &nbsp; &nbsp; &nbsp;`no` &nbsp; &nbsp; &nbsp; &nbsp; &nbsp; -> disabled  
 &nbsp; &nbsp; &nbsp;`adjacent` -> places `0` in the cell DIRECTLY before the first value  
-&nbsp; &nbsp; &nbsp;`snapshot` -> places `0` in the SNAPSHOT before the first value (only effective when `padding` enabled)
+&nbsp; &nbsp; &nbsp;`snapshot` -> places `0` in the SNAPSHOT before the first value (only effective when `result_padding` enabled)
 
 `fill_first`  
 Also place a `0` before labels whose first value appears at the very start of the timeline. (`yes` / `no`)
@@ -234,6 +238,25 @@ Also place a `0` before labels whose first value appears at the very start of th
 Controls where snapshot URLs and errors appear in the reformatted file when `split_output = merged`. Has no effect otherwise.  
 &nbsp; &nbsp; &nbsp;`grouped` &nbsp; &nbsp; &nbsp; &nbsp;-> all data rows for all groups appear first, then all `url (suffix)` rows, then all `error (suffix)` rows at the bottom  
 &nbsp; &nbsp; &nbsp;`interleaved` -> each filter has a group label, then `url (suffix)`, `error (suffix)`, then that filter's data rows
+<br>
+<br>
+### FETCH MODE
+
+`headless_browser`  
+Controls how each snapshot is fetched. (`yes` / `no`)
+
+**Default (`no`) — plain HTTP request**  
+Sends a direct HTTP request and parses the raw HTML response. Fast, lightweight, and reliable for most sites. Use this unless values are missing (see below).
+
+**Headless browser (`yes`) — Chromium**  
+Launches a real Chromium browser and fully executes the page's JavaScript before extracting elements. Use this when the default mode consistently returns blank or missing values that are visible when loading the page in a normal browser. This is needed when a site populates element content via JavaScript after the initial page load.
+
+Note: significantly slower and more resource intensive than the default. Each snapshot requires a full browser page load, so runs take considerably longer. If the relevant JavaScript API calls were not archived at the time of the snapshot, it falls back to the live API and returns current data instead of historical data. Chromium (~300MB) is downloaded automatically on first use.
+
+**Threads in headless mode**  
+The `threads` setting works differently depending on the fetch mode:  
+&nbsp; &nbsp; &nbsp;Default mode &nbsp; &nbsp; -> threads fetch in parallel, giving near-linear speedup  
+&nbsp; &nbsp; &nbsp;Headless mode -> each thread runs its own Chromium instance; more threads means more CPU and memory usage, and a higher chance of rate limiting from the Wayback Machine. `2` or `3` threads is recommended.
 <br>
 <br>
 ### ADVANCED
@@ -258,4 +281,4 @@ When a snapshot fails, how many closest snapshots from the same time period to t
 Has no effect when `frequency = all`.
 
 `threads`  
-Number of parallel threads for fetching snapshots.
+Number of parallel threads for fetching snapshots. See **FETCH MODE** for how this interacts with `headless_browser`.

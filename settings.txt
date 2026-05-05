@@ -43,7 +43,7 @@ show_seconds = no
 output = wayback_results
 file_override = yes
 csv_layout = rows
-padding = no
+result_padding = no
 split_output = no
 show_month = yes
 show_day = yes
@@ -59,9 +59,12 @@ zero_fill = no
 fill_first = no
 merged_meta = interleaved
 
+# --- FETCH MODE ------------------------------------------------------------------------------------------
+headless_browser = no
+
 # --- ADVANCED --------------------------------------------------------------------------------------------
 min_gap = 0.5
 delay = 10
 retries = 5
-fallback_candidates = 2
+fallback_candidates = 1
 threads = 3
