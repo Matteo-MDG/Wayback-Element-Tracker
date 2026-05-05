@@ -8,10 +8,8 @@ import calendar
 import threading
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
-
 import html
 from urllib.parse import urlparse, parse_qs, unquote
-
 import requests
 from bs4 import BeautifulSoup
 
@@ -270,7 +268,8 @@ def save_log(output_path: str, log_dir: str = None):
             f.write("\n")
         print(f"[Log]    Saved -> {os.path.abspath(log_path)}")
     except Exception as e:
-        print(f"[Warning] Could not save log: {e}")
+        clean_err = re.sub(r'https?://\S+', '', str(e)).strip()
+        print(f"[Warning] Could not save log: {clean_err}")
 
 
 # ── Attribute Helpers ─────────────────────────────────────────────────────────
@@ -611,13 +610,16 @@ zero_fill = no
 fill_first = no
 merged_meta = interleaved
 
+# --- FETCH MODE ------------------------------------------------------------------------------------------
+headless_browser = no
+
 # --- ADVANCED --------------------------------------------------------------------------------------------
 min_gap = 0.5
 delay = 10
 retries = 5
 fallback_candidates = 1
 threads = 3
-headless_browser = no
+thread_stagger = 3
 """
 
 
@@ -824,6 +826,7 @@ def load_settings(path="settings.txt") -> dict:
         "retries": int(raw["retries"]),
         "fallback_candidates": fallback_candidates,
         "threads": threads,
+        "thread_stagger": float(raw["thread_stagger"]),
         "headless_browser": yesno(raw["headless_browser"]),
         "reformat": do_reformat,
         "reformat_pairs": reformat_pairs,
@@ -924,11 +927,12 @@ def get_snapshots(cfg: dict) -> list:
 
             return snapshots
         except Exception as e:
+            clean_err = re.sub(r'https?://\S+', '', str(e)).strip().strip(":")
             if attempt < cfg["retries"]:
-                log(f"[CDX]    Query failed: {e} -- retrying in {cfg['delay']}s ...")
+                log(f"[CDX]    Query failed: {clean_err} -- retrying in {cfg['delay']}s ...")
                 time.sleep(cfg["delay"])
             else:
-                sys.exit(f"[CDX]    Query failed after {cfg['retries']} attempts: {e}")
+                sys.exit(f"[CDX]    Query failed after {cfg['retries']} attempts: {clean_err}")
 
 
 # ── Step 2: Sampling ──────────────────────────────────────────────────────────
@@ -1197,24 +1201,35 @@ def _browser_worker():
         item = _browser_queue.get()
         if item is None:          # shutdown signal
             break
-        wayback_url, future = item
+        wayback_url, selectors, future = item
         try:
             page = browser.new_page()
             try:
                 page.route(
-                    "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,otf,eot}",
+                    "**/*.{png,jpg,jpeg,gif,webp,svg,woff,woff2,ttf,otf,eot,css}",
+                    lambda route, _: route.abort(),
+                )
+                page.route(
+                    "**/web.archive.org/static/**",
                     lambda route, _: route.abort(),
                 )
                 # Wait for the page load event first (reliable), then give JS
-                # up to 10 extra seconds to finish its API calls. If networkidle
-                # doesn't happen in time we proceed anyway — the element may
-                # already be populated.
+                # up to 10 extra seconds to finish its API calls. If the target
+                # selector appears sooner we bail out early; if no CSS selector
+                # is available (bare nth-child steps only) we fall back to
+                # networkidle. Both timeouts are soft — we proceed regardless.
                 resp = page.goto(wayback_url, wait_until="load", timeout=30_000)
                 if resp is None or not resp.ok:
                     status = resp.status if resp else "no response"
                     raise RuntimeError(f"HTTP {status}")
                 try:
-                    page.wait_for_load_state("networkidle", timeout=10_000)
+                    if selectors:
+                        page.wait_for_selector(
+                            ", ".join(dict.fromkeys(selectors)),
+                            timeout=10_000,
+                        )
+                    else:
+                        page.wait_for_load_state("networkidle", timeout=10_000)
                 except Exception:
                     pass  # proceed with whatever JS has run so far
                 future.set_result(page.content())
@@ -1247,7 +1262,8 @@ def _get_browser(n: int = 1):
                 _browser_threads.append(t)
     _all_browsers_ready.wait()
     if _browser_error:
-        sys.exit(f"[Error]  Failed to launch Chromium: {_browser_error}")
+        clean_err = re.sub(r'https?://\S+', '', str(_browser_error)).strip()
+        sys.exit(f"[Error]  Failed to launch Chromium: {clean_err}")
 
 
 def _close_browser():
@@ -1259,13 +1275,13 @@ def _close_browser():
         t.join(timeout=10)
 
 
-def _fetch_html_playwright(wayback_url: str) -> str:
+def _fetch_html_playwright(wayback_url: str, selectors: list) -> str:
     """
     Submit a fetch job to the browser thread and block until the result is ready.
     Raises on timeout or navigation failure.
     """
     future = _cf.Future()
-    _browser_queue.put((wayback_url, future))
+    _browser_queue.put((wayback_url, selectors, future))
     return future.result()   # blocks until the browser thread finishes the job
 
 
@@ -1313,7 +1329,12 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
         for attempt in range(1, cfg["retries"] + 1):
             try:
                 if cfg["headless_browser"]:
-                    html_text = _fetch_html_playwright(wayback_url)
+                    selectors = [
+                        e["selector_chain"][0]["sel"]
+                        for e in cfg["elements"]
+                        if e["selector_chain"][0]["sel"] is not None
+                    ]
+                    html_text = _fetch_html_playwright(wayback_url, selectors)
                 else:
                     resp = session.get(
                         wayback_url, timeout=15,
@@ -2141,7 +2162,7 @@ def run_pass(indices: list, snapshots: list, results: list,
     fallbacks_map = fallbacks_map or {}
     failed = []
     with requests.Session() as session:
-        if cfg["threads"] > 1:
+        if cfg["threads"] > 1 and not cfg["headless_browser"]:
             futures = {}
             with ThreadPoolExecutor(max_workers=cfg["threads"]) as executor:
                 for idx, i in enumerate(indices):
@@ -2153,11 +2174,11 @@ def run_pass(indices: list, snapshots: list, results: list,
                         fallbacks_map.get(snap["timestamp"]),
                     )
                     futures[fut] = i
-                    # In headless mode, stagger the first `threads` submissions so
-                    # browsers don't all hit the Wayback Machine simultaneously,
-                    # which tends to trigger rate limiting.
-                    if cfg["headless_browser"] and idx < cfg["threads"] - 1:
-                        time.sleep(cfg["delay"])
+                    # In headless mode, stagger every submission so browsers
+                    # never hit the target site simultaneously, which tends to
+                    # trigger rate limiting on live API calls.
+                    if cfg["headless_browser"] and idx < len(indices) - 1:
+                        time.sleep(cfg["thread_stagger"])
                 for fut in as_completed(futures):
                     i = futures[fut]
                     result = fut.result()
@@ -2244,7 +2265,7 @@ def main():
     sample_str = ", ".join(date_parts)
 
     log("=" * 60)
-    log("  Wayback Element Tracker v1.7.0")
+    log("  Wayback Element Tracker v1.7.1")
     log("=" * 60)
 
     def _filter_display(filters):
