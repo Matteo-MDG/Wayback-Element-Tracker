@@ -9,8 +9,8 @@ Requirements before running (type into command prompt):
 &nbsp; &nbsp; &nbsp;`pip install -r requirements.txt`
 
 #### Usage:  
-&nbsp; &nbsp; &nbsp;Edit settings.txt, then run in command prompt:  
-&nbsp; &nbsp; &nbsp;`python wayback_element_tracker.py`
+&nbsp; &nbsp; &nbsp;Double click or run in command prompt:  
+&nbsp; &nbsp; &nbsp;`python wayback_element_tracker.pyw`
 <br>
 <br>
 ### URL
@@ -271,4 +271,4 @@ When a snapshot fails, how many closest snapshots from the same time period to t
 Has no effect when `frequency = all`.
 
 `threads`  
-Number of parallel threads for fetching snapshots.
+Number of parallel threads for fetching snapshots. Has no effect when `headless_browser` is enabled
