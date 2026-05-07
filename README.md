@@ -268,6 +268,7 @@ Note: HTTP 404 and 403 responses are not retried, they fail immediately.
 
 `fallback_candidates`  
 When a snapshot fails, how many closest snapshots from the same time period to try before giving up.  
+Candidates are capped by `min_gap`: any snapshot further than `min_gap` away from the selected snapshot is excluded.  
 Has no effect when `frequency = all`.
 
 `threads`  
