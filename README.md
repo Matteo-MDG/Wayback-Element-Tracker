@@ -172,7 +172,7 @@ Insert blank rows/columns in the CSV file for time periods that had no archived 
 Has no effect when `frequency = all`.
 
 `split_output`    
-&nbsp; &nbsp; &nbsp;`no` &nbsp; &nbsp; &nbsp; &nbsp; -> all variants written into one file, collisions resolved by `collision_priority`  
+&nbsp; &nbsp; &nbsp;`no` &nbsp; &nbsp; &nbsp; &nbsp; -> all variants written into one file; collisions resolved by `collision_priority`  
 &nbsp; &nbsp; &nbsp;`files` &nbsp; &nbsp;-> one output file per URL variant or filter  
 &nbsp; &nbsp; &nbsp;`merged` &nbsp;-> one output file containing all filter groups separately  
 
@@ -271,4 +271,4 @@ When a snapshot fails, how many closest snapshots from the same time period to t
 Has no effect when `frequency = all`.
 
 `threads`  
-Number of parallel threads for fetching snapshots. Has no effect when `headless_browser` is enabled
+Number of parallel threads for fetching snapshots. Has no effect when `headless_browser = yes`

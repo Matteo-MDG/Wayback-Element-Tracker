@@ -1647,6 +1647,8 @@ def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
                 descriptors.append(("date", lambda r, _=None: [r["date"]]))
                 if show_time:
                     descriptors.append(("time", lambda r, _=None: [r["time"]]))
+                descriptors.append((f"url ({suffix})",   lambda r, _=None: [r["url"]]))
+                descriptors.append((f"error ({suffix})", lambda r, _=None: [r["error"]]))
 
                 max_per_slot = {}
                 for elem in elements:
@@ -1673,9 +1675,6 @@ def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
                             def make_fn(s, idx):
                                 return lambda r: [(r["elem_values"].get(s, []) + [""] * (idx + 1))[idx]]
                             descriptors.append((lbl, make_fn(slot, i)))
-
-                descriptors.append((f"url ({suffix})",   lambda r, _=None: [r["url"]]))
-                descriptors.append((f"error ({suffix})", lambda r, _=None: [r["error"]]))
 
                 # Group label row then column headers
                 writer.writerow([suffix] + [""] * (len(descriptors) - 1))
@@ -1920,6 +1919,8 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
     descriptors.append(("date", lambda r, _=None: [r["date"]]))
     if show_time:
         descriptors.append(("time", lambda r, _=None: [r["time"]]))
+    descriptors.append(("url", lambda r, _=None: [r["url"]]))
+    descriptors.append(("error", lambda r, _=None: [r["error"]]))
 
     # Pre-compute max matches per slot so column count is consistent
     max_per_slot = {}
@@ -1951,9 +1952,6 @@ def write_csv(results: list, cfg: dict, output_path: str) -> None:
                     return lambda r: [(r["elem_values"].get(s, []) + [""] * (idx + 1))[idx]]
 
                 descriptors.append((label, make_fn(slot, i)))
-
-    descriptors.append(("url", lambda r, _=None: [r["url"]]))
-    descriptors.append(("error", lambda r, _=None: [r["error"]]))
 
     with open(output_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -2504,16 +2502,15 @@ _TIPS = {
     ),
     "filter_any": (
         "URL must match at least ONE filter, or will be skipped.\n\n"
-        "(blank)      \u2192  match only the exact URL, no variants\n"
-        "*            \u2192  include all URL variants\n"
-        "/subpage     \u2192  match URLs where /subpage appears at the end of the path\n"
-        "key=value    \u2192  match only URLs containing key=value as a query parameter\n"
-        "[filter]*    \u2192  substring match anywhere in the URL\n"
+        "(blank)      -> match only the exact URL, no variants\n"
+        "*                -> include all URL variants\n"
+        "/subpage  -> match URLs where /subpage appears at the end of the path\n"
+        "key=value -> match only URLs containing key=value as a query parameter\n"
+        "[filter]*      -> substring match anywhere in the URL\n"
         "                  e.g. key=* matches both key=1 and key=2\n"
-        "                       /subpage* matches /subpage-a and /subpage-b\n"
-        "![filter]    \u2192  exclude instead of include\n"
-        "                  (works with all of the above)\n\n"
-        "Multiple filters are separated by spaces.\n"
+        "                         /subpage* matches /subpage-a and /subpage-b\n"
+        "![filter]      -> exclude instead of include\n"
+        "                      (works with all of the above)\n\n"
         "e.g.  /images  key=value  !page=2"
     ),
     "filter_all": (
@@ -2526,42 +2523,39 @@ _TIPS = {
     ),
     "match_child_paths": (
         "Whether URL path filters (e.g. /subpage) also match pages deeper in the URL.\n\n"
-        "yes  \u2192  /subpage also matches /subpage/child, /subpage/child/page, etc.\n"
-        "no   \u2192  /subpage matches only example.com/subpage exactly\n\n"
-        "Note: substring filters like /subpage* always match child paths\n"
-        "regardless of this setting."
+        "yes -> /subpage also matches /subpage/child, /subpage/child/page, etc.\n"
+        "no  -> /subpage matches only example.com/subpage exactly\n\n"
+        "Note: substring filters like /subpage* always match child paths regardless of this setting."
     ),
     "element": (
         "The HTML element to track.\n"
         "Paste the HTML tag from Inspect Element.\n\n"
-        "A parent element can be entered before the target element,\n"
-        "separated by spaces:\n"
+        "A parent element can be entered before the target element, separated by spaces:\n"
         "  <div class=\"row\"> <span class=\"value\">5%</span>\n\n"
-        "To target a specific occurrence, place a number directly before\n"
-        "the child element:\n"
+        "To target a specific occurrence, place a number directly before the child element:\n"
         "  <div class=\"row\"> 2<span class=\"value\">text</span>\n"
-        "  \u2192 the 2nd span.value inside div.row\n\n"
+        "   -> the 2nd span.value inside div.row\n\n"
         "Bare numbers after a parent select by child position:\n"
         "  <div class=\"row\"> 2 3\n"
-        "  \u2192 the 3rd child of the 2nd child of div.row\n\n"
+        "   -> the 3rd child of the 2nd child of div.row\n\n"
         "All of these can be combined and stacked freely."
     ),
     "extract": (
         "What to extract from the element:\n\n"
-        "text         \u2192  visible text inside the element\n"
-        "title        \u2192  title=\"...\" attribute\n"
-        "href         \u2192  href=\"...\" attribute (links)\n"
-        "src          \u2192  src=\"...\" attribute (images, scripts)\n"
-        "value        \u2192  value=\"...\" attribute (inputs)\n"
-        "content      \u2192  content=\"...\" attribute (meta tags)\n"
-        "alt          \u2192  alt=\"...\" attribute (image descriptions)\n"
-        "placeholder  \u2192  placeholder=\"...\" attribute (input hints)\n"
-        "datetime     \u2192  datetime=\"...\" attribute (time elements)\n"
-        "action       \u2192  action=\"...\" attribute (forms)\n"
-        "data-*       \u2192  any custom data attribute\n"
-        "                  e.g. data-count, data-value\n\n"
-        "If a selector matches multiple elements on the page, all of them\n"
-        "are captured as separately numbered columns or rows."
+        "text              -> visible text inside the element\n"
+        "title              -> title=\"...\" attribute\n"
+        "href              -> href=\"...\" attribute (links)\n"
+        "src                -> src=\"...\" attribute (images, scripts)\n"
+        "value            -> value=\"...\" attribute (inputs)\n"
+        "content        -> content=\"...\" attribute (meta tags)\n"
+        "alt                 -> alt=\"...\" attribute (image descriptions)\n"
+        "placeholder -> placeholder=\"...\" attribute (input hints)\n"
+        "datetime      -> datetime=\"...\" attribute (time elements)\n"
+        "action           -> action=\"...\" attribute (forms)\n"
+        "data-*           -> any custom data attribute\n"
+        "                           e.g. data-count, data-value\n\n"
+        "If a selector matches multiple elements on the page, "
+        "all of them are captured as separately numbered columns or rows."
     ),
     "from_date": (
         "Start of the date range to search.\n"
@@ -2575,203 +2569,169 @@ _TIPS = {
     ),
     "frequency": (
         "Frequency of snapshots to check:\n\n"
-        "all      \u2192  every available snapshot\n"
-        "hourly   \u2192  one snapshot per hour\n"
-        "daily    \u2192  one snapshot per day\n"
-        "weekly   \u2192  one snapshot per week\n"
-        "monthly  \u2192  one snapshot per month\n"
-        "yearly   \u2192  one snapshot per year"
+        "all          -> every available snapshot\n"
+        "hourly    -> one snapshot per hour\n"
+        "daily      -> one snapshot per day\n"
+        "weekly   -> one snapshot per week\n"
+        "monthly -> one snapshot per month\n"
+        "yearly     -> one snapshot per year"
     ),
     "sample_from": (
         "Which snapshot to pick within each frequency period:\n\n"
-        "start   \u2192  the snapshot closest to the START of the period\n"
-        "middle  \u2192  the snapshot closest to the MIDDLE of the period\n"
-        "end     \u2192  the snapshot closest to the END of the period\n\n"
+        "start     -> the snapshot closest to the START of the period\n"
+        "middle -> the snapshot closest to the MIDDLE of the period\n"
+        "end      -> the snapshot closest to the END of the period\n\n"
         "Has no effect when frequency = all."
     ),
     "collision_priority": (
-        "When multiple URL variants have snapshots in the same time period,\n"
-        "determines which one is preferred:\n\n"
-        "time    \u2192  the variant whose timestamp is closest to the\n"
-        "             sample_from anchor wins\n"
-        "filter  \u2192  earlier listed filter_any filters take priority\n"
-        "             over later ones\n\n"
-        "Has no effect when no URL variants are tracked,\n"
-        "or when split_output = files."
+        "When multiple URL variants have snapshots in the same time period, determines which one is preferred:\n\n"
+        "time -> the variant whose timestamp is closest to the sample_from anchor wins\n"
+        "filter -> earlier listed filter_any filters take priority over later ones\n\n"
+        "Has no effect when no URL variants are tracked, or when split_output = files."
     ),
     "convention": (
-        "us        \u2192  month first  (November 5, 2023)\n"
-        "european  \u2192  day first    (5 November 2023)"
+        "us             -> month first  (November 5, 2023)\n"
+        "european -> day first    (5 November 2023)"
     ),
     "date_style": (
-        "long     \u2192  November 5, 2023  /  5 November 2023\n"
-        "short    \u2192  Nov 5, 2023  /  5 Nov 2023\n"
-        "numeric  \u2192  11/5/2023  /  5/11/2023"
+        "long       -> November 5, 2023  /  5 November 2023\n"
+        "short      -> Nov 5, 2023  /  5 Nov 2023\n"
+        "numeric -> 11/5/2023  /  5/11/2023"
     ),
     "year_digits": (
-        "4  \u2192  2023\n"
-        "2  \u2192  23"
+        "4 -> 2023\n"
+        "2 -> 23"
     ),
     "date_padding": (
-        "yes  \u2192  11/05/2023\n"
-        "no   \u2192  11/5/2023"
+        "yes -> 11/05/2023\n"
+        "no  -> 11/5/2023"
     ),
     "time_format": (
-        "12h  \u2192  2:30 PM\n"
-        "24h  \u2192  14:30"
+        "12h -> 2:30 PM\n"
+        "24h -> 14:30"
     ),
     "time_padding": (
-        "yes  \u2192  06:50\n"
-        "no   \u2192  6:50"
+        "yes -> 06:50\n"
+        "no  -> 6:50"
     ),
     "show_seconds": "Show seconds in the time?",
     "show_month": (
         "Show the month in the output CSV?\n\n"
-        "At least one of show_month, show_day, show_year,\n"
-        "or show_time must be yes."
     ),
     "show_day": (
         "Show the day in the output CSV?\n\n"
-        "At least one of show_month, show_day, show_year,\n"
-        "or show_time must be yes."
     ),
     "show_year": (
         "Show the year in the output CSV?\n\n"
-        "At least one of show_month, show_day, show_year,\n"
-        "or show_time must be yes."
     ),
     "show_time": (
         "Show the time in the output CSV?\n\n"
-        "At least one of show_month, show_day, show_year,\n"
-        "or show_time must be yes."
     ),
     "output": (
         "CSV file name.\n\n"
-        "After each run, a .log file is saved alongside the CSV with\n"
-        "the same base name. Each new program execution is added to the\n"
-        "end of the log file, which will track the last 10 runs."
+        "After each run, a .log file is saved alongside the CSV with the same base name. "
+        "Each new program execution is added to the end of the log file, which will track the last 10 runs."
     ),
     "file_override": (
         "Whether to overwrite the output file if it already exists.\n\n"
-        "yes  \u2192  overwrite\n"
-        "no   \u2192  add an incrementing counter instead\n"
-        "          e.g.  wayback_results.csv\n"
-        "                wayback_results_1.csv\n"
-        "                wayback_results_2.csv  \u2026"
+        "yes -> overwrite\n"
+        "no  -> add an incrementing counter instead\n"
+        "            e.g.  wayback_results.csv\n"
+        "                    wayback_results_1.csv\n"
+        "                    wayback_results_2.csv"
     ),
     "csv_layout": (
-        "columns  \u2192  each attribute is a column, each snapshot is a row\n"
-        "               date | time | element | url | error\n\n"
-        "rows     \u2192  each attribute is a row, each snapshot is a column\n"
-        "               date | Jan 1 | Feb 1 | \u2026\n"
-        "               elem | value | value | \u2026\n\n"
+        "columns -> each attribute is a column, each snapshot is a row\n"
+        "                    date | time | element | url | error\n\n"
+        "rows       -> each attribute is a row, each snapshot is a column\n"
+        "                    date | Jan 1 | Feb 1 | ...\n"
+        "                    elem | value | value | ...\n\n"
         "The url column contains the full Wayback Machine URL of each snapshot.\n"
         "The error column is blank on success, or contains the failure reason\n"
         "(e.g. timeout, HTTP 404).\n\n"
         "When an element cannot be extracted, its cell is left empty.\n"
         "The console output distinguishes two cases:\n"
-        "  (no element)  \u2192  element was not found anywhere on the page\n"
-        "  (blank)       \u2192  element was found but the extracted value was empty"
+        "   (no element) -> element was not found anywhere on the page\n"
+        "   (blank)           -> element was found but the extracted value was empty"
     ),
     "result_padding": (
         "Insert blank rows/columns for time periods with no archived snapshots.\n\n"
-        "yes  \u2192  Jan 1 | Feb 1 | Mar 1 | \u2026\n"
-        "          value |        | value | \u2026\n\n"
-        "no   \u2192  Jan 1 | Mar 1 | \u2026\n"
-        "          value | value | \u2026\n\n"
+        "yes -> Jan 1 | Feb 1 | Mar 1 | ...\n"
+        "           value |        | value | ...\n\n"
+        "no  -> Jan 1 | Mar 1 | ...\n"
+        "           value | value | ...\n\n"
         "Has no effect when frequency = all."
     ),
     "split_output": (
-        "no      \u2192  all variants written into one file;\n"
-        "             collisions resolved by collision_priority\n"
-        "files   \u2192  one output file per URL variant or filter\n"
-        "merged  \u2192  one output file containing all filter groups separately"
+        "no          -> all variants written into one file; collisions resolved by collision_priority\n"
+        "files       -> one output file per URL variant or filter\n"
+        "merged -> one output file containing all filter groups separately"
     ),
     "reformat": (
         "Writes an additional [filename]_reformatted CSV per raw output file.\n\n"
         "Pairs two elements \u2014 one as a label and one as a value for that label.\n"
         "Moves each value element into one row (or column) per unique label.\n\n"
         "e.g.\n"
-        "  date | Jan 1 | Feb 1 | \u2026        date  | Jan 1 | Feb 1 | \u2026\n"
-        "  elem | label | label | \u2026   \u2192   label | value | value | \u2026\n"
-        "  elem | value | value | \u2026"
+        "  date | Jan 1 | Feb 1 | ...        date  | Jan 1 | Feb 1 | ...\n"
+        "  elem | label | label | ...  ->  label | value | value | ...\n"
+        "  elem | value | value | ..."
     ),
     "label_elements": (
-        "The index of the element(s) whose output become the LABELS\n"
-        "in the reformatted file.\n\n"
-        "e.g.  2  will treat element_2 as the label.\n\n"
+        "The index of the element(s) whose output become the LABELS in the reformatted file.\n\n"
+        "e.g. 2 will treat element_2 as the label.\n\n"
         "Multiple indexes separated by spaces.\n"
-        "The index of the label element is paired with the index of\n"
-        "the value element at the same position."
+        "The index of the label element is paired with the index of the value element at the same position."
     ),
     "value_elements": (
-        "The index of the element(s) whose output become the VALUES\n"
-        "in the reformatted file.\n\n"
-        "e.g.  3  will treat element_3 as the value to track.\n\n"
+        "The index of the element(s) whose output become the VALUES in the reformatted file.\n\n"
+        "e.g. 3 will treat element_3 as the value to track.\n\n"
         "Multiple indexes separated by spaces.\n"
-        "For label_elements = 1 2 and value_elements = 3 4,\n"
-        "elements 1 and 3 are paired and elements 2 and 4 are paired."
+        "For label_elements = 1 2 and value_elements = 3 4, elements 1 and 3 are paired and elements 2 and 4 are paired."
     ),
     "sort": (
         "How to order the label rows / columns in the reformatted file:\n\n"
-        "unsorted  \u2192  labels appear in first-seen order\n"
-        "alphabet  \u2192  alphabetical A\u2013Z (case insensitive)\n"
-        "reverse   \u2192  alphabetical Z\u2013A (case insensitive)"
+        "unsorted -> labels appear in first-seen order\n"
+        "alphabet -> alphabetical A\u2013Z (case insensitive)\n"
+        "reverse    -> alphabetical Z\u2013A (case insensitive)"
     ),
     "zero_fill": (
-        "When a label first appears partway through the timeline,\n"
-        "places a 0 before its first value.\n\n"
-        "no        \u2192  disabled\n"
-        "adjacent  \u2192  places 0 in the cell directly before the first value\n"
-        "snapshot  \u2192  places 0 in the snapshot before the first value\n"
+        "When a label first appears partway through the timeline, places a 0 before its first value.\n\n"
+        "no            -> disabled\n"
+        "adjacent  -> places 0 in the cell directly before the first value\n"
+        "snapshot -> places 0 in the snapshot before the first value\n"
         "               (only effective when result_padding is enabled)"
     ),
     "fill_first": (
-        "Also place a 0 before labels whose first value appears\n"
-        "at the very start of the timeline."
+        "Also place a 0 before labels whose first value appears at the very start of the timeline."
     ),
     "merged_meta": (
-        "Controls where snapshot URLs and errors appear in the reformatted\n"
-        "file when split_output = merged. Has no effect otherwise.\n\n"
-        "grouped      \u2192  all data rows for all groups appear first,\n"
-        "                  then all url rows, then all error rows at the bottom\n"
-        "interleaved  \u2192  each filter has a group label, then url, then error,\n"
-        "                  then that filter's data rows"
+        "Controls where snapshot URLs and errors appear in the reformatted file when split_output = merged. Has no effect otherwise.\n\n"
+        "grouped     -> all data rows for all groups appear first, then all url rows, then all error rows at the bottom\n"
+        "interleaved -> each filter has a group label, then url, then error, then that filter's data rows"
     ),
     "headless_browser": (
-        "Use a headless Chromium browser to fetch every snapshot instead\n"
-        "of a plain HTTP request.\n\n"
-        "Enable this when the regular fetch consistently returns blank or\n"
-        "missing values that are visible when loading the page in a real\n"
-        "browser. This executes each page's JavaScript fully before\n"
-        "extracting elements, which is needed when a site populates\n"
-        "element content with JavaScript.\n\n"
-        "Note: significantly slower and resource intensive than the default\n"
-        "method. Chromium (~300 MB) is downloaded automatically on first use."
+        "Use a headless Chromium browser to fetch every snapshot instead of a plain HTTP request.\n\n"
+        "Enable this when the regular fetch consistently returns blank or missing values that are visible when loading the page in a real browser. "
+        "This executes each page's JavaScript fully before extracting elements, which is needed when a site populates element content with JavaScript.\n\n"
+        "Note: significantly slower and resource intensive than the default method. Chromium (~300 MB) is downloaded automatically on first use."
     ),
     "min_gap": (
-        "Minimum gap between 2 consecutive selected snapshots, as a\n"
-        "fraction of the frequency period. Snapshots closer together\n"
-        "than this are compared and the one farther from its anchor\n"
-        "is discarded.\n\n"
-        "0.5  \u2192  half the period\n"
-        "          e.g. ~15 days for monthly, 12 hours for daily\n"
-        "0    \u2192  disabled\n\n"
+        "Minimum gap between 2 consecutive selected snapshots, as a fraction of the frequency period. "
+        "Snapshots closer together than this are compared and the one farther from its anchor is discarded.\n\n"
+        "0.5 -> half the period\n"
+        "           e.g. ~15 days for monthly, 12 hours for daily\n"
+        "0    -> disabled\n\n"
         "Has no effect when frequency = all."
     ),
     "delay": (
-        "Seconds to wait between retry attempts\n"
-        "and between CDX query retries."
+        "Seconds to wait between retry attempts and between CDX query retries."
     ),
     "retries": (
-        "How many times to retry a failing snapshot or CDX query\n"
-        "before giving up.\n\n"
-        "Note: HTTP 404 and 403 responses are not retried,\n"
-        "they fail immediately."
+        "How many times to retry a failing snapshot or CDX query before giving up.\n\n"
+        "Note: HTTP 404 and 403 responses are not retried, they fail immediately."
     ),
     "fallback_candidates": (
-        "When a snapshot fails, how many closest snapshots from the\n"
-        "same time period to try before giving up.\n\n"
+        "When a snapshot fails, how many closest snapshots from the same time period to try before giving up.\n\n"
         "Has no effect when frequency = all."
     ),
     "threads": (
@@ -2973,6 +2933,27 @@ class WaybackGUI:
     def _mark_dirty(self, *_):
         if not self._loading:
             self._unsaved = True
+            # Schedule a check — if the user reverted back to the saved state
+            # (e.g. enabled then disabled a setting), clear the dirty flag.
+            self.root.after_idle(self._check_if_clean)
+
+    def _check_if_clean(self):
+        """Clear _unsaved if current state matches the last saved/loaded snapshot."""
+        if self._loading or not hasattr(self, "_saved_raw"):
+            return
+        current = {k: self._disabled_real_values.get(k, sv.get())
+                   for k, sv in self._vars.items()}
+        for key, txt in self._element_text_widgets.items():
+            current[key] = txt.get("1.0", "end-1c").replace("\n", " ").strip()
+        if current == self._saved_raw:
+            self._unsaved = False
+
+    def _save_snapshot(self):
+        """Capture the current true state for future dirty-checking."""
+        self._saved_raw = {k: self._disabled_real_values.get(k, sv.get())
+                           for k, sv in self._vars.items()}
+        for key, txt in self._element_text_widgets.items():
+            self._saved_raw[key] = txt.get("1.0", "end-1c").replace("\n", " ").strip()
 
     # ── Layout helpers ────────────────────────────────────────────────────────
     def _scrollable_tab(self, title):
@@ -3149,7 +3130,7 @@ class WaybackGUI:
         self._set_state("fill_first",          no_reformat,           "reformat = no")
 
         if freq_all and split_files:
-            cp_reason = "frequency = all  and  split_output = files"
+            cp_reason = "frequency = all and split_output = files"
         elif freq_all:
             cp_reason = "frequency = all"
         else:
@@ -3157,7 +3138,7 @@ class WaybackGUI:
         self._set_state("collision_priority", freq_all or split_files, cp_reason)
 
         if no_reformat and not_merged:
-            mm_reason = "reformat = no  and  split_output \u2260 merged"
+            mm_reason = "reformat = no and split_output \u2260 merged"
         elif no_reformat:
             mm_reason = "reformat = no"
         else:
@@ -3230,10 +3211,12 @@ class WaybackGUI:
 
             ttk.Label(f, text="extract").grid(
                 row=r, column=0, sticky="w", padx=(10, 4), pady=3)
-            ttk.Combobox(f, textvariable=self._var(f"extract_{i}"),
+            _ecb = ttk.Combobox(f, textvariable=self._var(f"extract_{i}"),
                          values=EXTRACT_OPTS, state="normal", width=18,
-                         height=EXTRACT_HEIGHT).grid(
-                row=r, column=1, sticky="w", padx=(0, 4), pady=3)
+                         height=EXTRACT_HEIGHT)
+            _ecb.grid(row=r, column=1, sticky="w", padx=(0, 4), pady=3)
+            _ecb.bind("<<ComboboxSelected>>",
+                      lambda e, cb=_ecb: cb.selection_clear(), add="+")
             self._qbtn(f, r, "extract"); r += 1
 
     def _build_schedule_tab(self):
@@ -3458,6 +3441,7 @@ class WaybackGUI:
         self._loading = False
         self._unsaved = False
         self._update_states()
+        self._save_snapshot()
 
     def _save(self):
         self._sync_vars_from_text_widgets()
@@ -3467,6 +3451,7 @@ class WaybackGUI:
                for k, sv in self._vars.items()}
         _write_settings(raw)
         self._unsaved = False
+        self._save_snapshot()
 
     def _reset_saved(self):
         if not tk.messagebox.askyesno(
@@ -3523,7 +3508,7 @@ class WaybackGUI:
         self._log_widget.configure(state="disabled")
         self._running = True
         self._proc = None
-        self._start_btn.configure(state="disabled", text="Running\u2026")
+        self._start_btn.configure(state="disabled", text="Running...")
         self._stop_btn.configure(state="normal")
 
         flags = 0
