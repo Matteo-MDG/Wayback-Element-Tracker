@@ -18,7 +18,7 @@ _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
 COMMIT_DATE = ""
-VERSION = "v2.1.0"
+VERSION = "v2.1.1"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -770,7 +770,8 @@ def load_settings(path="settings.txt") -> dict:
                 return step["sel"]
 
         selector = " > ".join(_step_display(s) for s in selector_chain)
-        if extract != "text" and extract not in extractables:
+        last_step_is_bare_child = selector_chain[-1]["sel"] is None
+        if extract != "text" and extract not in extractables and not last_step_is_bare_child:
             others = [a for a in extractables if a != extract]
             msg = (
                 f"[Warning] extract_{i} = '{extract}' not found on pasted element '{selector}'.\n"
@@ -3067,7 +3068,23 @@ if "--worker" not in sys.argv:
                 return None
             btn = ttk.Button(parent, text="?", width=2)
             btn.grid(row=row, column=3, sticky="w", padx=(2, 8), pady=2)
-            _Tooltip(btn, tip)
+            tt = _Tooltip(btn, tip)
+
+            def _in_canvas_viewport(widget):
+                """Return True only if widget is within its scrollable canvas's visible area."""
+                w = widget.master
+                while w is not None:
+                    if isinstance(w, tk.Canvas):
+                        wy = widget.winfo_rooty()
+                        cy = w.winfo_rooty()
+                        return cy <= wy and (wy + widget.winfo_height()) <= (cy + w.winfo_height())
+                    w = getattr(w, "master", None)
+                return True  # no canvas ancestor — always visible
+
+            # Show/hide tooltip on keyboard focus, but only when the button is
+            # actually visible (not scrolled out of view in the tab's canvas).
+            btn.bind("<FocusIn>",  lambda e: tt._show(e) if _in_canvas_viewport(btn) else None, add="+")
+            btn.bind("<FocusOut>", tt._hide, add="+")
             return btn
 
         def _field(self, parent, row, label, widget_fn, hint="", tip_key=""):
@@ -3094,7 +3111,73 @@ if "--worker" not in sys.argv:
         def _entry(self, parent, key, width=38):
             e = ttk.Entry(parent, textvariable=self._var(key), width=width)
             self._bind_arrow_nav(e)
+            self._bind_entry_undo(e, key)
             return e
+
+        def _bind_entry_undo(self, entry, key):
+            """Attach a debounced undo/redo stack to a ttk.Entry widget.
+            Changes are committed to the undo stack ~400 ms after the last keystroke,
+            so Ctrl+Z steps back in meaningful chunks rather than character by character.
+            Loading/resetting settings clears the stack so stale history isn't replayed."""
+            # Editable comboboxes select-all on FocusIn by default; clear it on the
+            # next tick (after(0)) so tabbing in doesn't highlight the entire value.
+            if isinstance(entry, ttk.Combobox):
+                entry.bind("<FocusIn>",
+                           lambda e: entry.after(0, entry.selection_clear), add="+")
+
+            undo_stack = []
+            redo_stack = []
+            _timer   = [None]
+            _baseline = [self._var(key).get()]   # last committed value
+
+            def _commit():
+                _timer[0] = None
+                current = self._var(key).get()
+                if current != _baseline[0]:
+                    undo_stack.append(_baseline[0])
+                    redo_stack.clear()
+                    _baseline[0] = current
+
+            def _on_change(*_):
+                if self._loading:
+                    # Settings load/reset: update baseline silently and wipe history.
+                    if _timer[0]:
+                        entry.after_cancel(_timer[0])
+                        _timer[0] = None
+                    _baseline[0] = self._var(key).get()
+                    undo_stack.clear()
+                    redo_stack.clear()
+                    return
+                if _timer[0]:
+                    entry.after_cancel(_timer[0])
+                _timer[0] = entry.after(400, _commit)
+
+            def _undo(e):
+                # Flush any pending debounce first so the current edit is on the stack.
+                if _timer[0]:
+                    entry.after_cancel(_timer[0])
+                    _commit()
+                if undo_stack:
+                    redo_stack.append(self._var(key).get())
+                    val = undo_stack.pop()
+                    _baseline[0] = val
+                    self._var(key).set(val)
+                    entry.icursor("end")
+                return "break"
+
+            def _redo(e):
+                if redo_stack:
+                    undo_stack.append(self._var(key).get())
+                    val = redo_stack.pop()
+                    _baseline[0] = val
+                    self._var(key).set(val)
+                    entry.icursor("end")
+                return "break"
+
+            self._var(key).trace_add("write", _on_change)
+            entry.bind("<Control-z>",       _undo)
+            entry.bind("<Control-y>",       _redo)
+            entry.bind("<Control-Shift-z>", _redo)
 
         def _bind_arrow_nav(self, widget):
             """Bind Up/Down arrows to move the cursor to the start/end of the field."""
@@ -3108,8 +3191,11 @@ if "--worker" not in sys.argv:
             widget.bind("<Down>", _down)
 
         def _combo(self, parent, key, values, width=14, editable=False):
-            return ttk.Combobox(parent, textvariable=self._var(key), values=values,
-                                state="normal" if editable else "readonly", width=width)
+            cb = ttk.Combobox(parent, textvariable=self._var(key), values=values,
+                              state="normal" if editable else "readonly", width=width)
+            if editable:
+                self._bind_entry_undo(cb, key)
+            return cb
 
         # -- Tab builders ----------------------------------------------------------
         def _set_state(self, key, disabled, reason=""):
@@ -3240,9 +3326,14 @@ if "--worker" not in sys.argv:
                               highlightthickness=1,
                               highlightbackground=_border,
                               highlightcolor=_border,
-                              padx=3, pady=2)
+                              padx=3, pady=2,
+                              undo=True)
                 txt.grid(row=r, column=1, sticky="ew", padx=(0, 4), pady=3)
                 self._element_text_widgets[f"element_{i}"] = txt
+
+                # Tab / Shift-Tab move focus out of the text box instead of inserting whitespace.
+                txt.bind("<Tab>",       lambda e, w=txt: (w.tk_focusNext().focus_set(), "break")[1])
+                txt.bind("<Shift-Tab>", lambda e, w=txt: (w.tk_focusPrev().focus_set(), "break")[1])
 
                 def _on_text_modified(e, _txt=txt):
                     if _txt.edit_modified() and not self._loading:
@@ -3259,6 +3350,7 @@ if "--worker" not in sys.argv:
                 _ecb.grid(row=r, column=1, sticky="w", padx=(0, 4), pady=3)
                 _ecb.bind("<<ComboboxSelected>>",
                           lambda e, cb=_ecb: cb.selection_clear(), add="+")
+                self._bind_entry_undo(_ecb, f"extract_{i}")
                 self._qbtn(f, r, "extract"); r += 1
 
         def _build_schedule_tab(self):
@@ -3494,13 +3586,16 @@ if "--worker" not in sys.argv:
                                         state="disabled")
             self._stop_btn.pack(side="left")
 
-            # Right-side settings buttons (packed right-to-left so order reads left-to-right)
-            ttk.Button(btn_bar, text="Reset to Defaults",
-                       command=self._reset_defaults).pack(side="right")
-            ttk.Button(btn_bar, text="Reset to Last Saved",
-                       command=self._reset_saved).pack(side="right", padx=(0, 4))
-            ttk.Button(btn_bar, text="Save Settings",
-                       command=self._save).pack(side="right", padx=(0, 4))
+            # Right-side settings buttons in a sub-frame so pack order (left-to-right)
+            # matches visual order and Tab cycles them in the correct direction.
+            right_bar = ttk.Frame(btn_bar)
+            right_bar.pack(side="right")
+            ttk.Button(right_bar, text="Save Settings",
+                       command=self._save).pack(side="left", padx=(0, 4))
+            ttk.Button(right_bar, text="Reset to Last Saved",
+                       command=self._reset_saved).pack(side="left", padx=(0, 4))
+            ttk.Button(right_bar, text="Reset to Defaults",
+                       command=self._reset_defaults).pack(side="left")
 
             # Output log
             log_frame = ttk.LabelFrame(self.root, text="Output log")
@@ -3510,6 +3605,73 @@ if "--worker" not in sys.argv:
                 log_frame, height=17, wrap="word",
                 font=("Consolas", 9), state="disabled")
             self._log_widget.pack(fill="both", expand=True, padx=4, pady=4)
+
+            self._bind_shortcuts()
+
+        # -- Keyboard shortcuts ----------------------------------------------------
+        def _bind_shortcuts(self):
+            # Ctrl+Tab / Ctrl+Shift+Tab: cycle notebook tabs.
+            # ttk.Notebook has these built in but they can be swallowed by focused
+            # child widgets, so we re-bind them on the root window for reliability.
+            def _next_tab(e):
+                tabs = self.notebook.tabs()
+                self.notebook.select((self.notebook.index("current") + 1) % len(tabs))
+                return "break"
+            def _prev_tab(e):
+                tabs = self.notebook.tabs()
+                self.notebook.select((self.notebook.index("current") - 1) % len(tabs))
+                return "break"
+            self.root.bind("<Control-Tab>",       _next_tab)
+            self.root.bind("<Control-Shift-Tab>", _prev_tab)
+
+            # Enter on any button: invoke it (ttk buttons respond to Space but not
+            # Return by default on Windows).
+            self.root.bind_class("TButton", "<Return>",
+                                 lambda e: e.widget.invoke(), add="+")
+
+            # Enter / Space on a combobox: open the dropdown (same as Alt+Down).
+            # For editable combos, Space still types a space — only suppress it on readonly.
+            def _open_combo(e):
+                w = e.widget
+                if str(w.cget("state")) == "disabled":
+                    return
+                w.event_generate("<Alt-Down>")
+                if str(w.cget("state")) == "readonly":
+                    return "break"
+            self.root.bind_class("TCombobox", "<Return>", _open_combo, add="+")
+            self.root.bind_class("TCombobox", "<space>",  _open_combo, add="+")
+
+            # Ctrl+Z / Ctrl+Y: undo and redo inside element text boxes.
+            # tk.Text with undo=True already binds Ctrl+Z to <<Undo>>; we add
+            # Ctrl+Y (and Ctrl+Shift+Z) for redo which has no default binding.
+            def _redo(e):
+                try:
+                    e.widget.edit_redo()
+                except tk.TclError:
+                    pass
+                return "break"
+            self.root.bind_class("Text", "<Control-y>",       _redo, add="+")
+            self.root.bind_class("Text", "<Control-Shift-z>", _redo, add="+")
+
+            # Ctrl+S: save settings.
+            self.root.bind("<Control-s>", lambda e: self._save())
+
+            # F5: start a run (ignored while already running).
+            self.root.bind("<F5>", lambda e: self._start() if not self._running else None)
+
+            # Escape: stop a run (ignored while idle, so it never interferes).
+            self.root.bind("<Escape>", lambda e: self._stop() if self._running else None)
+
+            # Alt+1-6: jump directly to a tab by number.
+            for i in range(6):
+                self.root.bind(f"<Alt-Key-{i + 1}>",
+                               lambda e, idx=i: self.notebook.select(idx))
+
+            # Alt+L: focus the output log for scrolling / copying.
+            self.root.bind("<Alt-l>",
+                           lambda e: self._log_widget.configure(state="normal") or
+                                     self._log_widget.focus_set() or
+                                     self._log_widget.configure(state="disabled"))
 
         # -- Element text-widget sync helpers -------------------------------------
         def _sync_text_widgets_from_vars(self):
