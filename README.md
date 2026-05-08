@@ -308,7 +308,7 @@ Show the time in the output CSV? (`yes` / `no`)
 |---|---|
 | `Ctrl+Tab` | Next tab |
 | `Ctrl+Shift+Tab` | Previous tab |
-| `Alt+1` ... `Alt+6` | Jump to tab 1 - 6 |
+| `Alt+1` ... `Alt+7` | Jump to tabs 1 - 7 |
 | `Tab` / `Shift+Tab` | Move focus to next / previous field |
 | `Enter` / `Space` | Invoke focused button; open focused dropdown |
 | `Ctrl+S` | Save Settings |
