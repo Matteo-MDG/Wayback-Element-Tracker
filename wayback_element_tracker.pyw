@@ -18,7 +18,7 @@ _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
 COMMIT_DATE = ""
-VERSION = "v2.1.1"
+VERSION = "v2.1.2"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -623,6 +623,21 @@ delay = 10
 retries = 5
 fallback_candidates = 1
 threads = 3
+
+# --- KEYBOARD SHORTCUTS ----------------------------------------------------------------------------------
+shortcut_save = Ctrl+S
+shortcut_start = F5
+shortcut_stop = Escape
+shortcut_focus_log = Alt+L
+shortcut_next_tab = Ctrl+Tab
+shortcut_prev_tab = Ctrl+Shift+Tab
+shortcut_tab_1 = Alt+1
+shortcut_tab_2 = Alt+2
+shortcut_tab_3 = Alt+3
+shortcut_tab_4 = Alt+4
+shortcut_tab_5 = Alt+5
+shortcut_tab_6 = Alt+6
+shortcut_tab_7 = Alt+7
 """
 
 
@@ -2501,6 +2516,101 @@ if "--worker" not in sys.argv:
     SETTINGS_PATH = "settings.txt"
     YES_NO = ["yes", "no"]
 
+    # -- Keyboard shortcut helpers -------------------------------------------------
+    _SC_MOD_MAP = {
+        "ctrl": "Control", "control": "Control",
+        "alt": "Alt", "shift": "Shift",
+        "win": "Win", "cmd": "Command", "command": "Command", "meta": "Meta",
+    }
+    _SC_KEY_MAP = {
+        "tab": "Tab", "escape": "Escape", "esc": "Escape",
+        "enter": "Return", "return": "Return",
+        "space": "space", "backspace": "BackSpace",
+        "delete": "Delete", "del": "Delete",
+        "home": "Home", "end": "End",
+        "pageup": "Prior", "pagedown": "Next",
+        "up": "Up", "down": "Down", "left": "Left", "right": "Right",
+        "insert": "Insert",
+        **{f"f{n}": f"F{n}" for n in range(1, 13)},
+    }
+
+    def _shortcut_to_tk(s: str) -> str:
+        """Convert 'Ctrl+S' / 'Alt+1' style string to a Tkinter event sequence."""
+        s = s.strip()
+        if not s:
+            return ""
+        parts = [p.strip() for p in s.split("+") if p.strip()]
+        if not parts:
+            return ""
+        mods = []
+        key_part = None
+        for p in parts:
+            m = _SC_MOD_MAP.get(p.lower())
+            if m:
+                if m not in mods:
+                    mods.append(m)
+            else:
+                key_part = p
+        if key_part is None:
+            return ""
+        kl = key_part.lower()
+        if kl in _SC_KEY_MAP:
+            tk_key = _SC_KEY_MAP[kl]
+        elif len(key_part) == 1:
+            c = key_part
+            # Alt+digit needs the "Key-" prefix in Tkinter on Windows/Linux
+            if c.isdigit() and "Alt" in mods:
+                tk_key = f"Key-{c}"
+            else:
+                tk_key = c.lower()
+        else:
+            tk_key = key_part  # pass-through for unknown names
+        seq = ("-".join(mods) + "-" + tk_key) if mods else tk_key
+        return f"<{seq}>"
+
+    def _capture_shortcut(root, var, btn):
+        """Temporarily capture the next keypress and write it to *var* as 'Mod+Key'.
+        Pressing Escape during capture cancels without changing the value."""
+        btn.configure(text="Press key…", state="disabled")
+        _handler = [None]
+
+        def _on_key(e):
+            keysym = e.keysym
+            # Ignore standalone modifier keypresses - keep waiting
+            if keysym in ("Control_L", "Control_R", "Alt_L", "Alt_R", "Shift_L",
+                          "Shift_R", "Win_L", "Win_R", "Super_L", "Super_R",
+                          "Meta_L", "Meta_R"):
+                return
+            root.unbind("<KeyPress>", _handler[0])
+            btn.configure(text="Capture", state="normal")
+            # Escape with no modifiers cancels the capture
+            if keysym == "Escape" and not (e.state & 0x4) and not (e.state & 0x1) \
+                    and not (e.state & 0x8) and not (e.state & 0x20000):
+                return "break"
+            parts = []
+            state = e.state
+            if state & 0x4:                       parts.append("Ctrl")
+            if state & 0x8 or state & 0x20000:    parts.append("Alt")
+            if state & 0x1:                       parts.append("Shift")
+            # Friendly key name
+            friendly = {
+                "Tab": "Tab", "Escape": "Escape", "Return": "Enter",
+                "space": "Space", "BackSpace": "Backspace", "Delete": "Delete",
+                "Prior": "PageUp", "Next": "PageDown",
+                **{f"F{n}": f"F{n}" for n in range(1, 13)},
+            }
+            kl = keysym.lower()
+            if kl in _SC_KEY_MAP:
+                parts.append(friendly.get(_SC_KEY_MAP[kl], _SC_KEY_MAP[kl]))
+            elif len(keysym) == 1:
+                parts.append(keysym.upper())
+            else:
+                parts.append(keysym)
+            var.set("+".join(parts))
+            return "break"
+
+        _handler[0] = root.bind("<KeyPress>", _on_key, add="+")
+
     # -- Tooltip texts (sourced from README) ---------------------------------------
     _TIPS = {
         "url": (
@@ -2758,6 +2868,10 @@ if "--worker" not in sys.argv:
             "Number of parallel threads for fetching snapshots.\n\n"
             "Has no effect when headless_browser = yes."
         ),
+        "shortcut_focus_log": (
+            "Focuses the output log panel so you can scroll through it or select\n"
+            "and copy text without having to click it with the mouse."
+        ),
     }
 
 
@@ -2929,6 +3043,7 @@ if "--worker" not in sys.argv:
             self._proc = None
             self._run_thread = None
             self._log_q = _queue.Queue()
+            self._bound_shortcuts = {}   # action -> (sequence, func_id)
 
             # Parse defaults once for use by _set_state (show-default-when-disabled logic)
             self._defaults = {}
@@ -3119,11 +3234,10 @@ if "--worker" not in sys.argv:
             Changes are committed to the undo stack ~400 ms after the last keystroke,
             so Ctrl+Z steps back in meaningful chunks rather than character by character.
             Loading/resetting settings clears the stack so stale history isn't replayed."""
-            # Editable comboboxes select-all on FocusIn by default; clear it on the
-            # next tick (after(0)) so tabbing in doesn't highlight the entire value.
-            if isinstance(entry, ttk.Combobox):
-                entry.bind("<FocusIn>",
-                           lambda e: entry.after(0, entry.selection_clear), add="+")
+            # Select-all on FocusIn is the default for both Entry and Combobox;
+            # clear it on the next tick so tabbing in doesn't highlight the entire value.
+            entry.bind("<FocusIn>",
+                       lambda e: entry.after(0, entry.selection_clear), add="+")
 
             undo_stack = []
             redo_stack = []
@@ -3502,6 +3616,79 @@ if "--worker" not in sys.argv:
                         lambda p: self._entry(p, "threads", 10),
                         tip_key="threads"); r += 1
 
+        def _build_shortcuts_tab(self):
+            f = self._scrollable_tab("Shortcuts")
+            f.columnconfigure(1, weight=1)
+            r = 0
+
+            def _shortcut_row(parent, row, label, key, tip_key=""):
+                """Non-tip rows: wide entry (cols 1-2) | Capture (col 3) | X (col 4).
+                Tip row: entry (col 1) | frame(Capture ? X) (col 2)."""
+                lbl = ttk.Label(parent, text=label)
+                lbl.grid(row=row, column=0, sticky="w", padx=(10, 4), pady=3)
+
+                has_tip = bool(tip_key and _TIPS.get(tip_key, ""))
+
+                if has_tip:
+                    container = ttk.Frame(parent)
+                    container.grid(row=row, column=1, columnspan=4, sticky="ew",
+                                   padx=(0, 8), pady=3)
+                    clr_btn = ttk.Button(container, text="✕", width=2,
+                                         command=lambda _v=self._var(key): _v.set(""))
+                    clr_btn.pack(side="right")
+                    _Tooltip(clr_btn, "Clear this shortcut")
+                    cap_btn = ttk.Button(container, text="Capture", width=8)
+                    cap_btn.configure(
+                        command=lambda _v=self._var(key), _b=cap_btn:
+                            _capture_shortcut(self.root, _v, _b))
+                    cap_btn.pack(side="right", padx=(0, 0))
+                    tip_btn = ttk.Button(container, text="?", width=2)
+                    tip_btn.pack(side="right", padx=(2, 2))
+                    _Tooltip(tip_btn, _TIPS[tip_key])
+                    e = ttk.Entry(container, textvariable=self._var(key), width=22)
+                    self._bind_arrow_nav(e)
+                    self._bind_entry_undo(e, key)
+                    e.pack(side="left", fill="x", expand=True, padx=(0, 2))
+                else:
+                    e = ttk.Entry(parent, textvariable=self._var(key), width=22)
+                    self._bind_arrow_nav(e)
+                    self._bind_entry_undo(e, key)
+                    e.grid(row=row, column=1, columnspan=2, sticky="ew", padx=(0, 4), pady=3)
+                    cap_btn = ttk.Button(parent, text="Capture", width=8)
+                    cap_btn.configure(
+                        command=lambda _v=self._var(key), _b=cap_btn:
+                            _capture_shortcut(self.root, _v, _b))
+                    cap_btn.grid(row=row, column=3, sticky="w", padx=(0, 2), pady=3)
+                    clr_btn = ttk.Button(parent, text="✕", width=2,
+                                         command=lambda _v=self._var(key): _v.set(""))
+                    clr_btn.grid(row=row, column=4, sticky="w", padx=(0, 8), pady=3)
+                    _Tooltip(clr_btn, "Clear this shortcut")
+
+                return e
+
+            self._section(f, r, "Run"); r += 1
+            _shortcut_row(f, r, "start run",   "shortcut_start"); r += 1
+            _shortcut_row(f, r, "stop run",    "shortcut_stop");  r += 1
+
+            self._sep(f, r); r += 1
+            self._section(f, r, "Settings"); r += 1
+            _shortcut_row(f, r, "save settings", "shortcut_save"); r += 1
+
+            self._sep(f, r); r += 1
+            self._section(f, r, "Navigation"); r += 1
+            _shortcut_row(f, r, "next tab",     "shortcut_next_tab"); r += 1
+            _shortcut_row(f, r, "previous tab", "shortcut_prev_tab"); r += 1
+
+            tab_labels = ["URL", "Elements", "Schedule", "Output", "Reformat", "Advanced", "Shortcuts"]
+            for i, tab_label in enumerate(tab_labels, start=1):
+                key = f"shortcut_tab_{i}"
+                _shortcut_row(f, r, f"jump to tab {i}  ({tab_label})", key); r += 1
+
+            self._sep(f, r); r += 1
+            self._section(f, r, "Output"); r += 1
+            _shortcut_row(f, r, "focus log", "shortcut_focus_log",
+                          tip_key="shortcut_focus_log"); r += 1
+
         # -- Main UI assembly ------------------------------------------------------
         # -- Update checker --------------------------------------------------------
         def _check_for_updates(self):
@@ -3574,6 +3761,7 @@ if "--worker" not in sys.argv:
             self._build_output_tab()
             self._build_reformat_tab()
             self._build_advanced_tab()
+            self._build_shortcuts_tab()
 
             # Button bar
             btn_bar = ttk.Frame(self.root)
@@ -3613,16 +3801,8 @@ if "--worker" not in sys.argv:
             # Ctrl+Tab / Ctrl+Shift+Tab: cycle notebook tabs.
             # ttk.Notebook has these built in but they can be swallowed by focused
             # child widgets, so we re-bind them on the root window for reliability.
-            def _next_tab(e):
-                tabs = self.notebook.tabs()
-                self.notebook.select((self.notebook.index("current") + 1) % len(tabs))
-                return "break"
-            def _prev_tab(e):
-                tabs = self.notebook.tabs()
-                self.notebook.select((self.notebook.index("current") - 1) % len(tabs))
-                return "break"
-            self.root.bind("<Control-Tab>",       _next_tab)
-            self.root.bind("<Control-Shift-Tab>", _prev_tab)
+            # These are also handled by _rebind_shortcuts using the shortcut vars,
+            # but we define the callbacks here so _rebind_shortcuts can reference them.
 
             # Enter on any button: invoke it (ttk buttons respond to Space but not
             # Return by default on Windows).
@@ -3630,7 +3810,7 @@ if "--worker" not in sys.argv:
                                  lambda e: e.widget.invoke(), add="+")
 
             # Enter / Space on a combobox: open the dropdown (same as Alt+Down).
-            # For editable combos, Space still types a space — only suppress it on readonly.
+            # For editable combos, Space still types a space - only suppress on readonly.
             def _open_combo(e):
                 w = e.widget
                 if str(w.cget("state")) == "disabled":
@@ -3642,8 +3822,6 @@ if "--worker" not in sys.argv:
             self.root.bind_class("TCombobox", "<space>",  _open_combo, add="+")
 
             # Ctrl+Z / Ctrl+Y: undo and redo inside element text boxes.
-            # tk.Text with undo=True already binds Ctrl+Z to <<Undo>>; we add
-            # Ctrl+Y (and Ctrl+Shift+Z) for redo which has no default binding.
             def _redo(e):
                 try:
                     e.widget.edit_redo()
@@ -3653,25 +3831,57 @@ if "--worker" not in sys.argv:
             self.root.bind_class("Text", "<Control-y>",       _redo, add="+")
             self.root.bind_class("Text", "<Control-Shift-z>", _redo, add="+")
 
-            # Ctrl+S: save settings.
-            self.root.bind("<Control-s>", lambda e: self._save())
+            # Apply the configurable shortcuts from settings vars
+            self._rebind_shortcuts()
 
-            # F5: start a run (ignored while already running).
-            self.root.bind("<F5>", lambda e: self._start() if not self._running else None)
+        def _rebind_shortcuts(self):
+            """Unbind old configurable shortcuts and bind the current settings values."""
 
-            # Escape: stop a run (ignored while idle, so it never interferes).
-            self.root.bind("<Escape>", lambda e: self._stop() if self._running else None)
+            def _bind_root(action, sequence, callback):
+                """Bind *sequence* on root for *action*, replacing any previous binding."""
+                old_seq, old_fid = self._bound_shortcuts.get(action, (None, None))
+                # Unbind old sequence (only this handler, not all handlers on that sequence)
+                if old_seq and old_fid:
+                    try:
+                        self.root.unbind(old_seq, old_fid)
+                    except Exception:
+                        pass
+                if not sequence:
+                    self._bound_shortcuts[action] = (None, None)
+                    return
+                fid = self.root.bind(sequence, callback, add="+")
+                self._bound_shortcuts[action] = (sequence, fid)
 
-            # Alt+1-6: jump directly to a tab by number.
-            for i in range(6):
-                self.root.bind(f"<Alt-Key-{i + 1}>",
-                               lambda e, idx=i: self.notebook.select(idx))
+            # -- Navigation callbacks ------------------------------------------
+            def _next_tab(e):
+                tabs = self.notebook.tabs()
+                self.notebook.select((self.notebook.index("current") + 1) % len(tabs))
+                return "break"
+            def _prev_tab(e):
+                tabs = self.notebook.tabs()
+                self.notebook.select((self.notebook.index("current") - 1) % len(tabs))
+                return "break"
 
-            # Alt+L: focus the output log for scrolling / copying.
-            self.root.bind("<Alt-l>",
-                           lambda e: self._log_widget.configure(state="normal") or
-                                     self._log_widget.focus_set() or
-                                     self._log_widget.configure(state="disabled"))
+            _bind_root("next_tab",   _shortcut_to_tk(self._var("shortcut_next_tab").get()),  _next_tab)
+            _bind_root("prev_tab",   _shortcut_to_tk(self._var("shortcut_prev_tab").get()),  _prev_tab)
+            _bind_root("save",       _shortcut_to_tk(self._var("shortcut_save").get()),      lambda e: self._save())
+            _bind_root("start",      _shortcut_to_tk(self._var("shortcut_start").get()),
+                       lambda e: self._start() if not self._running else None)
+            _bind_root("stop",       _shortcut_to_tk(self._var("shortcut_stop").get()),
+                       lambda e: self._stop() if self._running else None)
+            _bind_root("focus_log",  _shortcut_to_tk(self._var("shortcut_focus_log").get()),
+                       lambda e: (self._log_widget.configure(state="normal") or
+                                  self._log_widget.focus_set() or
+                                  self._log_widget.configure(state="disabled")))
+
+            # Tab-jump shortcuts (Alt+1 through Alt+7)
+            for i in range(1, 8):
+                key   = f"shortcut_tab_{i}"
+                idx   = i - 1
+                seq   = _shortcut_to_tk(self._var(key).get())
+                _bind_root(f"tab_{i}", seq,
+                           lambda e, _idx=idx: self.notebook.select(_idx)
+                           if _idx < len(self.notebook.tabs()) else None)
 
         # -- Element text-widget sync helpers -------------------------------------
         def _sync_text_widgets_from_vars(self):
@@ -3717,6 +3927,7 @@ if "--worker" not in sys.argv:
             _write_settings(raw)
             self._unsaved = False
             self._save_snapshot()
+            self._rebind_shortcuts()
 
         def _reset_saved(self):
             if not tk.messagebox.askyesno(
