@@ -6,7 +6,7 @@ Fetches archived snapshots of a webpage from the Wayback Machine, extracts a
 specific HTML element's value from each one, and saves the results to a CSV file.
 
 Requirements before running (type into command prompt):  
-&nbsp; &nbsp; &nbsp;`python setup.py`
+&nbsp; &nbsp; &nbsp;`pip install -r requirements.txt`
 
 #### Usage:  
 &nbsp; &nbsp; &nbsp;Double click or run in command prompt:  

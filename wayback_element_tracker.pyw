@@ -17,8 +17,7 @@ from bs4 import BeautifulSoup
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-COMMIT_DATE = ""
-VERSION = "v2.1.3"
+VERSION = "v2.1.4"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -3065,6 +3064,7 @@ if "--worker" not in sys.argv:
 
             self._build_ui()
             self._load_from_file()   # sets _loading=False and calls _update_states()
+            self._rebind_shortcuts() # re-register now that vars hold their loaded values
             for key in ("frequency", "headless_browser", "reformat", "split_output"):
                 self._var(key).trace_add("write", self._update_states)
             self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -3693,24 +3693,28 @@ if "--worker" not in sys.argv:
         # -- Main UI assembly ------------------------------------------------------
         # -- Update checker --------------------------------------------------------
         def _check_for_updates(self):
-            """Fetch the latest commit date from GitHub in a background thread.
-            Posts a banner if the repo has newer commits than this file's COMMIT_DATE."""
-            if not GITHUB_REPO or not COMMIT_DATE:
+            """Fetch the VERSION string from the raw file on GitHub and show a banner if newer."""
+            if not GITHUB_REPO or not VERSION:
                 return
             try:
                 resp = requests.get(
-                    f"https://api.github.com/repos/{GITHUB_REPO}/commits",
-                    params={"sha": "main", "per_page": 1},
+                    f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/wayback_element_tracker.pyw",
                     timeout=10,
-                    headers={"Accept": "application/vnd.github+json"},
                 )
                 if resp.status_code != 200:
                     return
-                commits = resp.json()
-                if not commits:
+                match = re.search(r'^VERSION\s*=\s*["\']([^"\']+)["\']', resp.text, re.MULTILINE)
+                if not match:
                     return
-                latest_date = commits[0]["commit"]["author"]["date"]
-                if latest_date > COMMIT_DATE:
+                latest = match.group(1).lstrip("v")
+
+                def parse(v):
+                    try:
+                        return tuple(int(x) for x in v.split("."))
+                    except ValueError:
+                        return (0,)
+
+                if parse(latest) > parse(VERSION.lstrip("v")):
                     repo_url = f"https://github.com/{GITHUB_REPO}"
                     self.root.after(0, self._show_update_banner, repo_url)
             except Exception:
@@ -3835,6 +3839,21 @@ if "--worker" not in sys.argv:
             # Apply the configurable shortcuts from settings vars
             self._rebind_shortcuts()
 
+            # Elevate root-level shortcut bindings above widget class bindings.
+            # By default, root.bind() fires at level 3 (widget → class → toplevel → all),
+            # so any widget class that returns "break" for a sequence (e.g. tk.Text
+            # consuming Ctrl+Tab as a tab-insertion) silently swallows the shortcut.
+            # Prepending the root tag to each widget's bindtags makes root bindings
+            # fire first, before the widget's own class handlers.
+            def _elevate_root_bindings(widget):
+                root_str = str(self.root)
+                tags = widget.bindtags()
+                if root_str not in tags:
+                    widget.bindtags((root_str,) + tags)
+                for child in widget.winfo_children():
+                    _elevate_root_bindings(child)
+            _elevate_root_bindings(self.root)
+
         def _rebind_shortcuts(self):
             """Unbind old configurable shortcuts and bind the current settings values."""
 
@@ -3936,6 +3955,7 @@ if "--worker" not in sys.argv:
                     "Discard all unsaved changes and reload from settings.txt?"):
                 return
             self._load_from_file()
+            self._rebind_shortcuts()
 
         def _reset_defaults(self):
             if not tk.messagebox.askyesno(
@@ -3962,6 +3982,7 @@ if "--worker" not in sys.argv:
             self._loading = False
             self._unsaved = False
             self._update_states()
+            self._rebind_shortcuts()
 
         def _on_close(self):
             if self._unsaved:
