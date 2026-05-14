@@ -2570,9 +2570,14 @@ if "--worker" not in sys.argv:
 
     def _capture_shortcut(root, var, btn):
         """Temporarily capture the next keypress and write it to *var* as 'Mod+Key'.
-        Pressing Escape during capture cancels without changing the value."""
-        btn.configure(text="Press key…", state="disabled")
+        Clicking the button again (shown as 'Cancel') cancels without changing the value."""
         _handler = [None]
+
+        def _cancel():
+            root.unbind("<KeyPress>", _handler[0])
+            btn.configure(text="Capture", command=lambda: _capture_shortcut(root, var, btn))
+
+        btn.configure(text="Cancel", command=_cancel)
 
         def _on_key(e):
             keysym = e.keysym
@@ -2582,11 +2587,7 @@ if "--worker" not in sys.argv:
                           "Meta_L", "Meta_R"):
                 return
             root.unbind("<KeyPress>", _handler[0])
-            btn.configure(text="Capture", state="normal")
-            # Escape with no modifiers cancels the capture
-            if keysym == "Escape" and not (e.state & 0x4) and not (e.state & 0x1) \
-                    and not (e.state & 0x8) and not (e.state & 0x20000):
-                return "break"
+            btn.configure(text="Capture", command=lambda: _capture_shortcut(root, var, btn))
             parts = []
             state = e.state
             if state & 0x4:                       parts.append("Ctrl")
