@@ -18,7 +18,7 @@ _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
 COMMIT_DATE = ""
-VERSION = "v2.1.2"
+VERSION = "v2.1.3"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
