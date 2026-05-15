@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-VERSION = "v2.1.6"
+VERSION = "v2.1.7"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -218,7 +218,7 @@ _next_to_print = [1]  # list so threads share the same mutable object
 def log(msg: str=""):
     """Print immediately and record in log."""
     with _print_lock:
-        print(msg)
+        print(msg, flush=True)
         _log_lines.append(msg)
 
 
@@ -233,11 +233,11 @@ def buffer_and_flush(index: int, msg: str, total: int = 0):
         # Progress tick: printed immediately, not held by the sequential buffer,
         # not saved to _log_lines. The GUI filters this prefix out of the display.
         if total and _GUI_MODE:
-            print(f"[_PROG_ {index}/{total}]")
+            print(f"[_PROG_ {index}/{total}]", flush=True)
         _print_buffer[index] = msg
         while _next_to_print[0] in _print_buffer:
             m = _print_buffer.pop(_next_to_print[0])
-            print(m)
+            print(m, flush=True)
             _log_lines.append(m)
             _next_to_print[0] += 1
 
@@ -250,7 +250,7 @@ def drain_buffer():
     with _print_lock:
         while _next_to_print[0] in _print_buffer:
             m = _print_buffer.pop(_next_to_print[0])
-            print(m)
+            print(m, flush=True)
             _log_lines.append(m)
             _next_to_print[0] += 1
 
@@ -630,8 +630,12 @@ headless_browser = no
 min_gap = 0.5
 delay = 10
 retries = 5
+end_passes = 2
 fallback_candidates = 1
 threads = 3
+
+# --- WINDOW ------------------------------------------------------------------------------------------
+always_on_top = no
 
 # --- KEYBOARD SHORTCUTS ----------------------------------------------------------------------------------
 shortcut_save = Ctrl+S
@@ -729,6 +733,13 @@ def load_settings(path="settings.txt") -> dict:
             raise ValueError
     except ValueError:
         sys.exit("[Error] 'fallback_candidates' must be an integer >= 0")
+
+    try:
+        end_passes = int(raw["end_passes"])
+        if end_passes < 0:
+            raise ValueError
+    except ValueError:
+        sys.exit("[Error] 'end_passes' must be an integer >= 0")
 
     min_gap_secs = int(FREQ_SECONDS.get(raw["frequency"], 0) * min_gap_frac)
 
@@ -848,6 +859,7 @@ def load_settings(path="settings.txt") -> dict:
         "file_override": yesno(raw["file_override"]),
         "delay": float(raw["delay"]),
         "retries": int(raw["retries"]),
+        "end_passes": end_passes,
         "fallback_candidates": fallback_candidates,
         "threads": threads,
         "headless_browser": yesno(raw["headless_browser"]),
@@ -2352,15 +2364,31 @@ def main():
     try:
         failed_indices = run_pass(
             list(range(total)), snapshots, results, total, cfg,
-            buffered=True, fallbacks_map=fallbacks_map,
+            buffered=_GUI_MODE, fallbacks_map=fallbacks_map,
         )
         drain_buffer()
     finally:
         if cfg["headless_browser"]:
             _close_browser()
 
+    if failed_indices and cfg["end_passes"] > 0:
+        cfg_no_retry = {**cfg, "retries": 1}
+        for pass_num in range(1, cfg["end_passes"] + 1):
+            if not failed_indices:
+                break
+            log(f"\n[End pass {pass_num}/{cfg['end_passes']}]  Retrying {len(failed_indices)} failed snapshot(s) ...")
+            time.sleep(cfg["delay"])
+            failed_indices = run_pass(
+                failed_indices, snapshots, results, total, cfg_no_retry,
+                buffered=False, fallbacks_map=fallbacks_map,
+            )
+            drain_buffer()
+
     if failed_indices:
-        log(f"\n[Done]   {len(failed_indices)} snapshot(s) failed after exhausting all fallback candidates.")
+        if cfg["end_passes"] > 0:
+            log(f"\n[Done]   {len(failed_indices)} snapshot(s) failed after exhausting all fallback candidates and end passes.")
+        else:
+            log(f"\n[Done]   {len(failed_indices)} snapshot(s) failed after exhausting all fallback candidates.")
 
     elapsed = time.time() - start_time
     mins, secs = divmod(int(elapsed), 60)

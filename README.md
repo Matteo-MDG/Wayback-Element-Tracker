@@ -413,6 +413,10 @@ Note: significantly slower and resource intensive than the default method. If th
 <br>
 ### ADVANCED
 
+`always_on_top`  
+Keep the window on top of all other windows. (`yes` / `no`)  
+<br>
+<br>
 `min_gap`  
 Minimum gap between 2 consecutive selected snapshots, as a fraction of the
 frequency period. Snapshots closer together than this are compared and the
@@ -433,6 +437,10 @@ Seconds to wait between retry attempts and between CDX query retries.
 `retries`  
 How many times to retry a failing snapshot or CDX query before giving up.  
 Note: HTTP 404 and 403 responses are not retried, they fail immediately.  
+<br>
+<br>
+`end_passes`  
+How many times to retry all snapshots that failed at the end of the script.  
 <br>
 <br>
 `fallback_candidates`  

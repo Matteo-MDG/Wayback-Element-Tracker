@@ -375,6 +375,13 @@ _TIPS = {
         "Any snapshot farther than `min_gap` from the selected snapshot is excluded.\n"
         "Has no effect when frequency = all."
     ),
+    "end_passes": (
+        "After the main run finishes, retry all still-failed snapshots this many times.\n\n"
+        "Each end pass makes one attempt per failed snapshot with no retries,\n"
+        "separated by the delay interval. Useful for recovering snapshots that\n"
+        "failed due to transient errors (timeouts, rate limiting) during the main run.\n\n"
+        "0 -> disabled"
+    ),
     "threads": (
         "Number of parallel threads for fetching snapshots.\n\n"
         "Has no effect when headless_browser = yes."
@@ -382,6 +389,9 @@ _TIPS = {
     "shortcut_focus_log": (
         "Focuses the output log panel so you can scroll through it or select\n"
         "and copy text without having to click it with the mouse."
+    ),
+    "always_on_top": (
+        "Keep the window on top of all other windows."
     ),
 }
 
@@ -1106,11 +1116,21 @@ class WaybackGUI:
                     ["interleaved", "grouped"]),
                     tip_key="merged_meta"); r += 1
 
+    def _apply_always_on_top(self, *_):
+        on_top = self._var("always_on_top").get().strip().lower() == "yes"
+        self.root.attributes("-topmost", on_top)
+
     def _build_advanced_tab(self):
         f = self._scrollable_tab("Advanced")
         f.columnconfigure(1, weight=1)
         r = 0
 
+        self._section(f, r, "Window"); r += 1
+        self._field(f, r, "Always on Top",
+                    lambda p: self._combo(p, "always_on_top", YES_NO),
+                    tip_key="always_on_top"); r += 1
+
+        self._sep(f, r); r += 1
         self._section(f, r, "Fetch Mode"); r += 1
         self._field(f, r, "Headless Browser",
                     lambda p: self._combo(p, "headless_browser", YES_NO),
@@ -1127,6 +1147,9 @@ class WaybackGUI:
         self._field(f, r, "Retries",
                     lambda p: self._entry(p, "retries", 10),
                     tip_key="retries"); r += 1
+        self._field(f, r, "End Passes",
+                    lambda p: self._entry(p, "end_passes", 10),
+                    tip_key="end_passes"); r += 1
         self._field(f, r, "Fallback Candidates",
                     lambda p: self._entry(p, "fallback_candidates", 10),
                     tip_key="fallback_candidates"); r += 1
@@ -1317,7 +1340,7 @@ class WaybackGUI:
         self._prog_canvas.grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self._prog_canvas.bind("<Configure>", lambda e: self._draw_prog())
 
-        self._progress_label = ttk.Label(prog_frame, text="", width=14, anchor="e")
+        self._progress_label = ttk.Label(prog_frame, text="", width=18, anchor="e")
         self._progress_label.grid(row=0, column=1, sticky="e")
 
         self._prog_frame = prog_frame
@@ -1470,6 +1493,7 @@ class WaybackGUI:
         self._unsaved = False
         self._update_states()
         self._save_snapshot()
+        self._apply_always_on_top()
 
     def _save(self):
         self._sync_vars_from_text_widgets()
@@ -1481,6 +1505,7 @@ class WaybackGUI:
         self._unsaved = False
         self._save_snapshot()
         self._rebind_shortcuts()
+        self._apply_always_on_top()
 
     def _reset_saved(self):
         if not tk.messagebox.askyesno(
@@ -1516,6 +1541,7 @@ class WaybackGUI:
         self._unsaved = False
         self._update_states()
         self._rebind_shortcuts()
+        self._apply_always_on_top()
 
     def _on_close(self):
         if self._unsaved:
@@ -1544,6 +1570,7 @@ class WaybackGUI:
         self._prog_done   = 0
         self._prog_total  = 0
         self._prog_mode   = "wrap"
+        self._prog_seen   = set()
         self._progress_label.configure(text="")
         self._wrap_start()
 
@@ -1699,15 +1726,15 @@ class WaybackGUI:
 
 
     def _poll_log(self):
-        MAX_LINES_PER_TICK = 30  # don't hog the main thread on bursts of output
-        processed = 0
-        try:
-            while processed < MAX_LINES_PER_TICK:
-                chunk = self._log_q.get_nowait()
-                processed += 1
+        MAX_LINES_PER_TICK = 30  # don't hog the main thread on bursts of log text
 
-                # Immediate out-of-order progress tick from the worker.
-                # Never shown in the log widget – used only to drive the bar.
+        # -- Pass 1: drain every queued item, split into progress signals vs log lines.
+        # Progress signals are processed immediately regardless of queue depth so the
+        # bar always reflects the latest state even during heavy output bursts.
+        pending_log = []
+        try:
+            while True:
+                chunk = self._log_q.get_nowait()
                 p = re.search(r'\[_PROG_ (\d+)/(\d+)\]', chunk)
                 if p:
                     idx, total = int(p.group(1)), int(p.group(2))
@@ -1716,45 +1743,35 @@ class WaybackGUI:
                             self._wrap_stop_anim()
                             self._prog_mode  = "fill"
                             self._prog_total = total
-                        self._prog_done += 1
+                        self._prog_seen.add(idx)
+                        self._prog_done = len(self._prog_seen)
                         pct = round(self._prog_done / total * 100)
                         self._draw_prog()
                         self._progress_label.configure(
                             text=f"{self._prog_done} / {total}  ({pct}%)")
-                    continue   # swallow – don't add to the log widget
-
-                # Check scroll position BEFORE inserting – after insertion the
-                # bottom fraction drops below 1.0 because new content extends
-                # past the viewport, making a post-insert check always look like
-                # the user has scrolled up even when they haven't.
-                at_bottom = self._log_widget.yview()[1] >= 0.999
-                self._log_widget.configure(state="normal")
-                self._log_widget.insert("end", chunk)
-                if at_bottom:
-                    self._log_widget.see("end")
-                self._log_widget.configure(state="disabled")
-
-                # Fallback: drive the bar from [X/Y] lines when no [_PROG_]
-                # signals are coming (e.g. older worker builds).
-                # Skip once we're already in fill mode – [_PROG_] signals are
-                # handling the count and the [X/Y] prefix in regular output
-                # lines would cause double-counting (one per element × snapshots).
-                if self._prog_mode != "fill":
-                    m = re.search(r'\[(\d+)/(\d+)\]', chunk)
-                    if m:
-                        idx, total = int(m.group(1)), int(m.group(2))
-                        if total > 0:
-                            if self._prog_mode == "wrap":
-                                self._wrap_stop_anim()
-                                self._prog_mode  = "fill"
-                                self._prog_total = total
-                            self._prog_done += 1
-                            pct = round(self._prog_done / total * 100)
-                            self._draw_prog()
-                            self._progress_label.configure(
-                                text=f"{self._prog_done} / {total}  ({pct}%)")
+                    # swallow – never add to the log widget
+                else:
+                    pending_log.append(chunk)
         except _queue.Empty:
             pass
+
+        # -- Pass 2: insert log text, capped so we don't freeze the UI on bursts.
+        # Any lines beyond the cap are re-queued at the front for the next tick.
+        for chunk in pending_log[:MAX_LINES_PER_TICK]:
+            # Check scroll position BEFORE inserting – after insertion the
+            # bottom fraction drops below 1.0 because new content extends
+            # past the viewport, making a post-insert check always look like
+            # the user has scrolled up even when they haven't.
+            at_bottom = self._log_widget.yview()[1] >= 0.999
+            self._log_widget.configure(state="normal")
+            self._log_widget.insert("end", chunk)
+            if at_bottom:
+                self._log_widget.see("end")
+            self._log_widget.configure(state="disabled")
+
+        for chunk in reversed(pending_log[MAX_LINES_PER_TICK:]):
+            self._log_q.queue.appendleft(chunk)
+
         self.root.after(100, self._poll_log)
 
     def _append_log(self, msg):
