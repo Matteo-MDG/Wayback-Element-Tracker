@@ -555,6 +555,12 @@ class WaybackGUI:
         self._run_thread = None
         self._log_q = _queue.Queue()
         self._bound_shortcuts = {}   # action -> (sequence, func_id)
+        # Progress canvas state
+        self._prog_mode    = "idle"  # "idle" | "wrap" | "fill"
+        self._prog_total   = 0       # total snapshots expected
+        self._prog_done    = 0       # count of completed snapshots
+        self._wrap_pos     = 0.0     # current pixel position of wrap segment (float)
+        self._wrap_job     = None    # root.after() handle for wrap animation tick
 
         # Parse defaults once for use by _set_state (show-default-when-disabled logic)
         self._defaults = {}
@@ -1288,7 +1294,7 @@ class WaybackGUI:
 
         self._stop_btn = ttk.Button(btn_bar, text="■  Stop", command=self._stop,
                                     state="disabled")
-        self._stop_btn.pack(side="left")
+        self._stop_btn.pack(side="left", padx=(0, 4))
 
         # Right-side settings buttons in a sub-frame so pack order (left-to-right)
         # matches visual order and Tab cycles them in the correct direction.
@@ -1301,8 +1307,24 @@ class WaybackGUI:
         ttk.Button(right_bar, text="Reset to Defaults",
                    command=self._reset_defaults).pack(side="left")
 
+        # Progress bar
+        prog_frame = ttk.Frame(self.root)
+        prog_frame.pack(fill="x", padx=6, pady=(0, 4))
+        prog_frame.columnconfigure(0, weight=1)
+
+        self._prog_canvas = tk.Canvas(prog_frame, height=20, bd=0,
+                                      highlightthickness=0, cursor="arrow")
+        self._prog_canvas.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._prog_canvas.bind("<Configure>", lambda e: self._draw_prog())
+
+        self._progress_label = ttk.Label(prog_frame, text="", width=14, anchor="e")
+        self._progress_label.grid(row=0, column=1, sticky="e")
+
+        self._prog_frame = prog_frame
+
         # Output log
         log_frame = ttk.LabelFrame(self.root, text="Output log")
+        self._log_frame = log_frame
         log_frame.pack(fill="both", expand=False, padx=6, pady=(0, 6))
 
         self._log_widget = scrolledtext.ScrolledText(
@@ -1519,6 +1541,11 @@ class WaybackGUI:
         self._proc = None
         self._start_btn.configure(state="disabled", text="Running...")
         self._stop_btn.configure(state="normal")
+        self._prog_done   = 0
+        self._prog_total  = 0
+        self._prog_mode   = "wrap"
+        self._progress_label.configure(text="")
+        self._wrap_start()
 
         flags = 0
         exe = sys.executable
@@ -1591,24 +1618,151 @@ class WaybackGUI:
     def _on_done(self):
         self._start_btn.configure(state="normal", text="\u25b6  Start")
         self._stop_btn.configure(state="disabled")
+        self._wrap_stop_anim()
+        self._prog_mode = "idle"
+        self._draw_prog()
+        self._progress_label.configure(text="")
 
-    # -- Log polling -----------------------------------------------------------
+    # -- Canvas progress bar --------------------------------------------------
+    # Two modes:
+    #   "wrap" – a green segment slides left→right and wraps back (pre-results)
+    #   "fill" – standard left-to-right proportional fill (during results)
+    # Using a tk.Canvas gives us full control over both animations without
+    # needing ctypes or platform-specific hacks.
+
+    _PROG_TRACK_BG = "#ECECEC"   # bar trough background
+    _PROG_TRACK_BD = "#BCBCBC"   # 1 px trough border
+    _PROG_GREEN    = "#06B025"   # fill / segment colour
+    _PROG_SEG_FRAC = 0.22        # wrap segment width as fraction of bar width
+    _WRAP_SPEED_MS = 1100        # ms for the segment to cross the full width once
+    _WRAP_FPS      = 60          # animation frame rate
+
+    def _draw_prog(self):
+        """Redraw the canvas bar in whatever mode is currently active."""
+        c = self._prog_canvas
+        w = c.winfo_width()
+        h = c.winfo_height()
+        if w <= 1 or h <= 1:
+            return
+        c.delete("all")
+        # Trough
+        c.create_rectangle(0, 0, w - 1, h - 1,
+                           fill=self._PROG_TRACK_BG, outline=self._PROG_TRACK_BD)
+        if self._prog_mode == "wrap":
+            self._draw_wrap_seg(w, h)
+        elif self._prog_mode == "fill" and self._prog_total > 0:
+            fill_w = max(0, int((w - 2) * self._prog_done / self._prog_total))
+            if fill_w > 0:
+                c.create_rectangle(1, 1, fill_w, h - 2,
+                                   fill=self._PROG_GREEN, outline="")
+
+    def _draw_wrap_seg(self, w, h):
+        """Draw the segment, entering from the left and exiting to the right."""
+        seg_w = max(50, int(w * self._PROG_SEG_FRAC))
+        x     = int(self._wrap_pos)
+        x1    = max(1, x)              # clamp: don't bleed past the left border
+        x2    = min(x + seg_w, w - 1) # clamp: don't bleed past the right border
+        if x2 > x1:
+            self._prog_canvas.create_rectangle(x1, 1, x2, h - 2,
+                                               fill=self._PROG_GREEN, outline="")
+
+    def _wrap_start(self):
+        """Start the animation with the segment fully off-screen to the left."""
+        self.root.update_idletasks()
+        w     = self._prog_canvas.winfo_width()
+        seg_w = max(50, int(w * self._PROG_SEG_FRAC))
+        self._wrap_pos = -float(seg_w)  # begin hidden behind the left wall
+        self._wrap_tick()
+
+    def _wrap_stop_anim(self):
+        """Cancel the wrap tick without changing _prog_mode."""
+        if self._wrap_job is not None:
+            self.root.after_cancel(self._wrap_job)
+            self._wrap_job = None
+
+    def _wrap_tick(self):
+        if self._prog_mode != "wrap":
+            self._wrap_job = None
+            return
+        w = self._prog_canvas.winfo_width()
+        if w > 1:
+            seg_w            = max(50, int(w * self._PROG_SEG_FRAC))
+            pixels_per_frame = w / (self._WRAP_SPEED_MS / (1000 / self._WRAP_FPS))
+            self._wrap_pos  += pixels_per_frame
+            # Reset only once the segment has fully left the right edge
+            if self._wrap_pos >= w:
+                self._wrap_pos = -float(seg_w)
+            self._draw_prog()
+        interval       = max(1, 1000 // self._WRAP_FPS)
+        self._wrap_job = self.root.after(interval, self._wrap_tick)
+
+
+
     def _poll_log(self):
+        MAX_LINES_PER_TICK = 30  # don't hog the main thread on bursts of output
+        processed = 0
         try:
-            while True:
+            while processed < MAX_LINES_PER_TICK:
                 chunk = self._log_q.get_nowait()
+                processed += 1
+
+                # Immediate out-of-order progress tick from the worker.
+                # Never shown in the log widget – used only to drive the bar.
+                p = re.search(r'\[_PROG_ (\d+)/(\d+)\]', chunk)
+                if p:
+                    idx, total = int(p.group(1)), int(p.group(2))
+                    if total > 0:
+                        if self._prog_mode == "wrap":
+                            self._wrap_stop_anim()
+                            self._prog_mode  = "fill"
+                            self._prog_total = total
+                        self._prog_done += 1
+                        pct = round(self._prog_done / total * 100)
+                        self._draw_prog()
+                        self._progress_label.configure(
+                            text=f"{self._prog_done} / {total}  ({pct}%)")
+                    continue   # swallow – don't add to the log widget
+
+                # Check scroll position BEFORE inserting – after insertion the
+                # bottom fraction drops below 1.0 because new content extends
+                # past the viewport, making a post-insert check always look like
+                # the user has scrolled up even when they haven't.
+                at_bottom = self._log_widget.yview()[1] >= 0.999
                 self._log_widget.configure(state="normal")
                 self._log_widget.insert("end", chunk)
-                self._log_widget.see("end")
+                if at_bottom:
+                    self._log_widget.see("end")
                 self._log_widget.configure(state="disabled")
+
+                # Fallback: drive the bar from [X/Y] lines when no [_PROG_]
+                # signals are coming (e.g. older worker builds).
+                # Skip once we're already in fill mode – [_PROG_] signals are
+                # handling the count and the [X/Y] prefix in regular output
+                # lines would cause double-counting (one per element × snapshots).
+                if self._prog_mode != "fill":
+                    m = re.search(r'\[(\d+)/(\d+)\]', chunk)
+                    if m:
+                        idx, total = int(m.group(1)), int(m.group(2))
+                        if total > 0:
+                            if self._prog_mode == "wrap":
+                                self._wrap_stop_anim()
+                                self._prog_mode  = "fill"
+                                self._prog_total = total
+                            self._prog_done += 1
+                            pct = round(self._prog_done / total * 100)
+                            self._draw_prog()
+                            self._progress_label.configure(
+                                text=f"{self._prog_done} / {total}  ({pct}%)")
         except _queue.Empty:
             pass
         self.root.after(100, self._poll_log)
 
     def _append_log(self, msg):
+        at_bottom = self._log_widget.yview()[1] >= 0.999
         self._log_widget.configure(state="normal")
         self._log_widget.insert("end", msg)
-        self._log_widget.see("end")
+        if at_bottom:
+            self._log_widget.see("end")
         self._log_widget.configure(state="disabled")
 
     def run(self):

@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-VERSION = "v2.1.5"
+VERSION = "v2.1.6"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -47,6 +47,10 @@ KNOWN_ATTRS = [
 ]
 
 MAX_ELEMENTS = 5
+
+# True when launched by the GUI (which passes --worker). Used to gate
+# output that is only meaningful to the GUI (e.g. [_PROG_] progress ticks).
+_GUI_MODE = "--worker" in sys.argv
 
 
 # -- URL Filter Helpers --------------------------------------------------------
@@ -218,12 +222,18 @@ def log(msg: str=""):
         _log_lines.append(msg)
 
 
-def buffer_and_flush(index: int, msg: str):
+def buffer_and_flush(index: int, msg: str, total: int = 0):
     """
     Buffer a snapshot result by its 1-based index, then flush all
     consecutive buffered messages so output appears in order.
+    Immediately emits a [_PROG_ index/total] signal line first so the GUI
+    progress bar updates the instant any thread finishes, regardless of order.
     """
     with _print_lock:
+        # Progress tick: printed immediately, not held by the sequential buffer,
+        # not saved to _log_lines. The GUI filters this prefix out of the display.
+        if total and _GUI_MODE:
+            print(f"[_PROG_ {index}/{total}]")
         _print_buffer[index] = msg
         while _next_to_print[0] in _print_buffer:
             m = _print_buffer.pop(_next_to_print[0])
@@ -1312,7 +1322,7 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
     if fallbacks:
         candidates.extend(fallbacks)
 
-    emit = buffer_and_flush if buffered else lambda idx, m: log(m)
+    emit = (lambda idx, m: buffer_and_flush(idx, m, total)) if buffered else lambda idx, m: log(m)
     max_sel_len = max(len(e["selector"]) for e in cfg["elements"])
 
     # Keep track of the primary date/time for the failure return dict

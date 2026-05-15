@@ -11,6 +11,13 @@ Requirements before running (type into command prompt):
 #### Usage:  
 &nbsp; &nbsp; &nbsp;Double click or run in command prompt:  
 &nbsp; &nbsp; &nbsp;`python wayback_element_tracker.pyw`
+
+#### Running without the GUI:  
+&nbsp; &nbsp; &nbsp;Edit `settings.txt`, then run in command prompt:  
+&nbsp; &nbsp; &nbsp;`python wayback_element_tracker.py`  
+
+&nbsp; &nbsp; &nbsp;The script reads settings from `settings.txt` in the same directory.  
+&nbsp; &nbsp; &nbsp;If the file does not exist it will be created automatically on first run.
 <br>
 <br>
 ### URL
