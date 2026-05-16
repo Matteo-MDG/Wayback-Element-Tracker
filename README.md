@@ -89,6 +89,8 @@ If a selector matches multiple elements on the page, all of them are captured. I
 A parent element can be entered before the target element, separated by spaces,  
 e.g. `<div class="paragraph1">` `<span class="paragraph2">text</span>` will target `span.paragraph2` elements that are only inside a `div.paragraph1` element.
 
+In the GUI, parent and child levels can alternatively be entered as separate boxes using the Add Child button. This is equivalent to typing them space-separated in a single box.
+
 To target a specific occurrence of the child element, place a number directly before it,  
 e.g. `<div class="paragraph1">` `2<span class="paragraph2">text</span>` grabs the 2nd `span.paragraph2` within `div.paragraph1`.  
 

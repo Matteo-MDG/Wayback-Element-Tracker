@@ -8,7 +8,7 @@ from wayback_element_tracker import DEFAULT_SETTINGS, MAX_ELEMENTS, VERSION, GIT
 # -- GUI -----------------------------------------------------------------------
 import tkinter as tk
 import tkinter.font as _tkfont
-from tkinter import ttk, scrolledtext, messagebox
+from tkinter import ttk, scrolledtext, messagebox, filedialog
 import queue as _queue
 import io as _io
 import subprocess
@@ -158,7 +158,10 @@ _TIPS = {
     "element": (
         "The HTML element to track.\n"
         "Paste the HTML tag from Inspect Element.\n\n"
-        "A parent element can be entered before the target element, separated by spaces:\n"
+        "To narrow the search by parent / child elements, either:\n"
+        "   -> Use the \"Add Child\" button to add each level separately, or\n"
+        "   -> Type everything in the parent box, separated by spaces\n\n"
+        "Parent before child, separated by spaces:\n"
         "  <div class=\"row\"> <span class=\"value\">5%</span>\n\n"
         "To target a specific occurrence, place a number directly before the child element:\n"
         "  <div class=\"row\"> 2<span class=\"value\">text</span>\n"
@@ -516,6 +519,9 @@ class _StdoutRouter(_io.TextIOBase):
 
 
 class WaybackGUI:
+    # Pixels of indent per child level in the Element selector rows.
+    _INDENT_PX = 16
+
     def __init__(self):
         self.root = tk.Tk()
         self.root.withdraw()   # hide until centred to avoid position flicker
@@ -559,12 +565,20 @@ class WaybackGUI:
 
         self._vars = {}
         self._field_rows = {}
-        self._element_text_widgets = {}   # key -> tk.Text for element_1..5
+        # element_1..5 dynamic level UI:
+        #   _element_levels[i]     -> list of {"var": StringVar, "row": Frame, "entry": Entry}
+        #   _element_containers[i] -> the rows_frame that holds the level rows
+        #   _element_add_btns[i]   -> the "+ Add Child" button (for enable/disable)
+        self._element_levels     = {}
+        self._element_containers = {}
+        self._element_add_btns   = {}
+        self._element_add_spacers = {}   # tk.Frame spacers whose width tracks indent depth
         self._running = False
         self._proc = None
         self._run_thread = None
         self._log_q = _queue.Queue()
         self._bound_shortcuts = {}   # action -> (sequence, func_id)
+        self._switching_tab_kb = False   # suppresses TabChangedHandler focus-move on keyboard tab switch
         # Progress canvas state
         self._prog_mode    = "idle"  # "idle" | "wrap" | "fill"
         self._prog_total   = 0       # total snapshots expected
@@ -629,8 +643,8 @@ class WaybackGUI:
             return
         current = {k: self._disabled_real_values.get(k, sv.get())
                    for k, sv in self._vars.items()}
-        for key, txt in self._element_text_widgets.items():
-            current[key] = txt.get("1.0", "end-1c").replace("\n", " ").strip()
+        for i in range(1, MAX_ELEMENTS + 1):
+            current[f"element_{i}"] = self._element_get_value(i)
         if current == self._saved_raw:
             self._unsaved = False
 
@@ -638,8 +652,8 @@ class WaybackGUI:
         """Capture the current true state for future dirty-checking."""
         self._saved_raw = {k: self._disabled_real_values.get(k, sv.get())
                            for k, sv in self._vars.items()}
-        for key, txt in self._element_text_widgets.items():
-            self._saved_raw[key] = txt.get("1.0", "end-1c").replace("\n", " ").strip()
+        for i in range(1, MAX_ELEMENTS + 1):
+            self._saved_raw[f"element_{i}"] = self._element_get_value(i)
 
     # -- Layout helpers --------------------------------------------------------
     def _scrollable_tab(self, title):
@@ -658,18 +672,23 @@ class WaybackGUI:
         def _wheel(e):
             # Only scroll canvas if content is taller than the viewport
             if inner.winfo_reqheight() > canvas.winfo_height():
-                canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+                canvas.yview_scroll(int(-1 * (e.delta / 120)) * 2, "units")
 
         def _combo_wheel(e):
             # Scroll the canvas, and block the combobox from cycling its value
             _wheel(e)
             return "break"
 
+        _wheel_bound = set()
+
         def _bind_wheel(widget):
-            if isinstance(widget, ttk.Combobox):
-                widget.bind("<MouseWheel>", _combo_wheel, add="+")
-            else:
-                widget.bind("<MouseWheel>", _wheel, add="+")
+            wid = str(widget)
+            if wid not in _wheel_bound:
+                _wheel_bound.add(wid)
+                if isinstance(widget, ttk.Combobox):
+                    widget.bind("<MouseWheel>", _combo_wheel, add="+")
+                else:
+                    widget.bind("<MouseWheel>", _wheel, add="+")
             for child in widget.winfo_children():
                 _bind_wheel(child)
 
@@ -694,6 +713,16 @@ class WaybackGUI:
 
         inner.bind("<Configure>", _on_inner_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
+
+        # On first display the canvas sets its window width before the Text
+        # widgets inside have completed their initial layout pass, so they
+        # don't wrap correctly until the next configure cycle.  Scheduling a
+        # second pass after idle ensures the correct width is applied on load.
+        def _force_reflow():
+            canvas.itemconfig(cw, width=canvas.winfo_width())
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        canvas.after_idle(_force_reflow)
+
         return inner
 
     def _section(self, parent, row, text):
@@ -709,8 +738,8 @@ class WaybackGUI:
         tip = _TIPS.get(tip_key, "")
         if not tip:
             return None
-        btn = ttk.Button(parent, text="?", width=2)
-        btn.grid(row=row, column=3, sticky="w", padx=(2, 8), pady=2)
+        btn = ttk.Button(parent, text="?", width=2, takefocus=False)
+        btn.grid(row=row, column=3, sticky="nw", padx=(2, 8), pady=2)
         tt = _Tooltip(btn, tip)
 
         def _in_canvas_viewport(widget):
@@ -726,8 +755,27 @@ class WaybackGUI:
 
         # Show/hide tooltip on keyboard focus, but only when the button is
         # actually visible (not scrolled out of view in the tab's canvas).
-        btn.bind("<FocusIn>",  lambda e: tt._show(e) if _in_canvas_viewport(btn) else None, add="+")
-        btn.bind("<FocusOut>", tt._hide, add="+")
+        # Use a short delay so that focus delivered automatically by a tab
+        # switch (before the canvas has laid out) doesn't immediately pop the
+        # tooltip at position (0,0).  The pending job is cancelled if focus
+        # leaves before the delay fires.
+        _focus_job = [None]
+
+        def _focus_show(e):
+            if not _in_canvas_viewport(btn):
+                return
+            if _focus_job[0] is not None:
+                btn.after_cancel(_focus_job[0])
+            _focus_job[0] = btn.after(200, lambda: tt._show(e) if btn.focus_displayof() == btn else None)
+
+        def _focus_hide(e):
+            if _focus_job[0] is not None:
+                btn.after_cancel(_focus_job[0])
+                _focus_job[0] = None
+            tt._hide(e)
+
+        btn.bind("<FocusIn>",  _focus_show, add="+")
+        btn.bind("<FocusOut>", _focus_hide, add="+")
         return btn
 
     def _field(self, parent, row, label, widget_fn, hint="", tip_key=""):
@@ -755,13 +803,69 @@ class WaybackGUI:
         e = ttk.Entry(parent, textvariable=self._var(key), width=width)
         self._bind_arrow_nav(e)
         self._bind_entry_undo(e, key)
+        self._bind_smooth_drag_scroll(e)
         return e
 
-    def _bind_entry_undo(self, entry, key):
+    def _bind_smooth_drag_scroll(self, entry):
+        """Replace the default B1-Motion auto-scroll with a smooth, symmetric version.
+
+        Tk's built-in behaviour scrolls left slowly (one char per timer tick) but
+        teleports on the right because it repositions the view differently. This
+        override handles both sides identically: the view scrolls one character per
+        tick at minimum and speeds up the further outside the widget the cursor is.
+        """
+        _job  = [None]
+        _last = [0]      # last known mouse-x relative to widget
+
+        def _cancel():
+            if _job[0]:
+                entry.after_cancel(_job[0])
+                _job[0] = None
+
+        def _step():
+            _job[0] = None
+            x = _last[0]
+            w = entry.winfo_width()
+            if x < 0:
+                units = max(1, (-x) // 8)
+                entry.xview_scroll(-units, "units")
+                idx = entry.index("@0")
+            elif x >= w:
+                units = max(1, (x - w + 1) // 8)
+                entry.xview_scroll(units, "units")
+                idx = entry.index(f"@{w - 1}")
+            else:
+                return   # cursor moved back inside — stop
+            entry.icursor(idx)
+            entry.selection_to(idx)
+            _job[0] = entry.after(16, _step)
+
+        def _on_motion(e):
+            _last[0] = e.x
+            w = entry.winfo_width()
+            # Clamp to widget interior for the @x index so it's always valid
+            clamped = max(0, min(e.x, w - 1))
+            idx = entry.index(f"@{clamped}")
+            entry.icursor(idx)
+            entry.selection_to(idx)
+            if e.x < 0 or e.x >= w:
+                if not _job[0]:
+                    _job[0] = entry.after(16, _step)
+            else:
+                _cancel()
+            return "break"   # suppress Tk's class-level handler
+
+        entry.bind("<B1-Motion>",       _on_motion)
+        entry.bind("<ButtonRelease-1>", lambda e: _cancel(), add="+")
+
+    def _bind_entry_undo(self, entry, key_or_var):
         """Attach a debounced undo/redo stack to a ttk.Entry widget.
         Changes are committed to the undo stack ~400 ms after the last keystroke,
         so Ctrl+Z steps back in meaningful chunks rather than character by character.
-        Loading/resetting settings clears the stack so stale history isn't replayed."""
+        Loading/resetting settings clears the stack so stale history isn't replayed.
+        Accepts either a named settings key (str) or a bare tk.StringVar."""
+        sv = self._var(key_or_var) if isinstance(key_or_var, str) else key_or_var
+
         # Select-all on FocusIn is the default for both Entry and Combobox;
         # clear it on the next tick so tabbing in doesn't highlight the entire value.
         entry.bind("<FocusIn>",
@@ -770,11 +874,11 @@ class WaybackGUI:
         undo_stack = []
         redo_stack = []
         _timer   = [None]
-        _baseline = [self._var(key).get()]   # last committed value
+        _baseline = [sv.get()]   # last committed value
 
         def _commit():
             _timer[0] = None
-            current = self._var(key).get()
+            current = sv.get()
             if current != _baseline[0]:
                 undo_stack.append(_baseline[0])
                 redo_stack.clear()
@@ -786,7 +890,7 @@ class WaybackGUI:
                 if _timer[0]:
                     entry.after_cancel(_timer[0])
                     _timer[0] = None
-                _baseline[0] = self._var(key).get()
+                _baseline[0] = sv.get()
                 undo_stack.clear()
                 redo_stack.clear()
                 return
@@ -800,37 +904,95 @@ class WaybackGUI:
                 entry.after_cancel(_timer[0])
                 _commit()
             if undo_stack:
-                redo_stack.append(self._var(key).get())
+                redo_stack.append(sv.get())
                 val = undo_stack.pop()
                 _baseline[0] = val
-                self._var(key).set(val)
+                sv.set(val)
                 entry.icursor("end")
             return "break"
 
         def _redo(e):
             if redo_stack:
-                undo_stack.append(self._var(key).get())
+                undo_stack.append(sv.get())
                 val = redo_stack.pop()
                 _baseline[0] = val
-                self._var(key).set(val)
+                sv.set(val)
                 entry.icursor("end")
             return "break"
 
-        self._var(key).trace_add("write", _on_change)
+        sv.trace_add("write", _on_change)
         entry.bind("<Control-z>",       _undo)
         entry.bind("<Control-y>",       _redo)
         entry.bind("<Control-Shift-z>", _redo)
 
     def _bind_arrow_nav(self, widget):
-        """Bind Up/Down arrows to move the cursor to the start/end of the field."""
+        """Bind Up/Down arrows to move the cursor to the start/end of the field
+        and scroll the entry view so the cursor is always visible.
+
+        Also override Left/Right so both sides scroll exactly one character at a
+        time.  Tk's default Right-arrow handler repositions the view by a large
+        offset (making it feel like it teleports), while Left already scrolls one
+        character per press.  Shift variants extend the selection by one character.
+        """
         def _up(e):
             widget.icursor(0)
+            widget.xview_moveto(0)
             return "break"
         def _down(e):
             widget.icursor("end")
+            widget.xview_moveto(1)
             return "break"
-        widget.bind("<Up>", _up)
-        widget.bind("<Down>", _down)
+
+        def _left(e):
+            pos = widget.index("insert")
+            if pos == 0:
+                return "break"
+            new_pos = pos - 1
+            widget.icursor(new_pos)
+            # If the cursor has gone past the left edge, scroll left by 1 unit
+            if widget.index("@0") > new_pos:
+                widget.xview_scroll(-1, "units")
+            return "break"
+
+        def _right(e):
+            pos = widget.index("insert")
+            end = widget.index("end")
+            if pos >= end:
+                return "break"
+            new_pos = pos + 1
+            widget.icursor(new_pos)
+            # If the cursor has gone past the right edge, scroll right by 1 unit
+            w = widget.winfo_width()
+            if widget.index(f"@{w - 1}") < new_pos:
+                widget.xview_scroll(1, "units")
+            return "break"
+
+        def _shift_left(e):
+            ins = widget.index("insert")
+            new_pos = max(0, ins - 1)
+            widget.icursor(new_pos)
+            widget.selection_to(new_pos)
+            if widget.index("@0") > new_pos:
+                widget.xview_scroll(-1, "units")
+            return "break"
+
+        def _shift_right(e):
+            ins = widget.index("insert")
+            end = widget.index("end")
+            new_pos = min(end, ins + 1)
+            widget.icursor(new_pos)
+            widget.selection_to(new_pos)
+            w = widget.winfo_width()
+            if widget.index(f"@{w - 1}") < new_pos:
+                widget.xview_scroll(1, "units")
+            return "break"
+
+        widget.bind("<Up>",          _up)
+        widget.bind("<Down>",        _down)
+        widget.bind("<Left>",        _left)
+        widget.bind("<Right>",       _right)
+        widget.bind("<Shift-Left>",  _shift_left)
+        widget.bind("<Shift-Right>", _shift_right)
 
     def _combo(self, parent, key, values, width=14, editable=False):
         cb = ttk.Combobox(parent, textvariable=self._var(key), values=values,
@@ -940,6 +1102,201 @@ class WaybackGUI:
                     lambda p: self._combo(p, "match_child_paths", YES_NO),
                     tip_key="match_child_paths"); r += 1
 
+    # -- Element level helpers ---------------------------------------------------
+
+    @staticmethod
+    def _split_element_levels(raw):
+        """Split a saved element string back into individual level tokens.
+
+        Each token is either a full HTML opening tag (optionally preceded by a
+        bare integer with no space, e.g. ``2<span class="x">``), or a bare
+        integer used as a direct-child index.  The tokens are later re-joined
+        with spaces to produce the value that ``wayback_element_tracker.py``
+        already knows how to parse – so no changes are needed in the backend.
+        """
+        raw = raw.strip()
+        if not raw:
+            return [""]
+
+        opening_tag_re = re.compile(r'<(?!/)[^>]+>')
+        tag_matches = list(opening_tag_re.finditer(raw))
+
+        if not tag_matches:
+            # Pure bare numbers (rare edge-case)
+            parts = raw.split()
+            return parts if parts else [""]
+
+        levels = []
+        prev_end = 0
+
+        for idx, m in enumerate(tag_matches):
+            gap      = raw[prev_end : m.start()]
+            gap_text = re.sub(r'<[^>]+>', '', gap).strip()
+            tag_html = m.group()
+
+            if idx == 0:
+                levels.append(tag_html)
+            else:
+                nums = re.findall(r'\b(\d+)\b', gap_text)
+                # Numbers that precede the tag but aren't the immediate prefix
+                # are standalone bare-child steps.
+                for n in nums[:-1]:
+                    levels.append(n)
+                if nums:
+                    # The last number is glued directly to the tag (no space).
+                    levels.append(nums[-1] + tag_html)
+                else:
+                    levels.append(tag_html)
+
+            prev_end = m.end()
+
+        # Bare integers after the last opening tag (nth-child navigation)
+        suffix = raw[prev_end:]
+        if not re.search(r'</\s*\w', suffix):        # ignore if there's a closing tag
+            for n in re.findall(r'\b(\d+)\b', re.sub(r'<[^>]+>', '', suffix)):
+                levels.append(n)
+
+        return levels if levels else [""]
+
+    def _element_get_value(self, i):
+        """Return the current raw element string for slot *i* by joining its levels."""
+        parts = [lv["entry"].get("1.0", "end-1c").replace("\n", " ").strip()
+                 for lv in self._element_levels.get(i, [])]
+        return " ".join(p for p in parts if p)
+
+    def _add_level(self, i, value="", *, _loading=False):
+        """Append one new level row to element slot *i*."""
+        levels      = self._element_levels[i]
+        rows_frame  = self._element_containers[i]
+        level_idx   = len(levels)
+
+        row_frame = ttk.Frame(rows_frame)
+        row_frame.pack(fill="x", pady=(0, 2))
+        row_frame.columnconfigure(0, minsize=level_idx * self._INDENT_PX)
+        row_frame.columnconfigure(1, weight=1)
+
+        # Indent marker for child levels.
+        # Level 0 is the root – its label is created but NOT gridded so the
+        # entry starts flush with other form fields.  Each successive child
+        # level shows a ↳ arrow right-aligned in the fixed-width column 0,
+        # giving consistent pixel-precise alignment regardless of font metrics.
+        if level_idx == 0:
+            indent_lbl = ttk.Label(row_frame, text="")
+            # intentionally not gridded - entry occupies the full row width
+        else:
+            indent_lbl = ttk.Label(row_frame, text="\u21b3", foreground="#888888")
+            indent_lbl.grid(row=0, column=0, sticky="e", padx=(0, 2))
+
+        _border = ttk.Style().lookup("TEntry", "bordercolor") or "#999999"
+        entry = tk.Text(row_frame, height=2, wrap=tk.WORD,
+                        font=("TkDefaultFont", 9),
+                        relief="flat", borderwidth=0,
+                        highlightthickness=1,
+                        highlightbackground=_border,
+                        highlightcolor=_border,
+                        padx=3, pady=2,
+                        undo=True)
+        entry.insert("1.0", value)
+        entry.edit_modified(False)
+        entry.grid(row=0, column=1, sticky="ew", padx=(0, 2))
+
+        # Tab / Shift-Tab move focus out instead of inserting whitespace.
+        entry.bind("<Tab>",       lambda e, w=entry: (w.tk_focusNext().focus_set(), "break")[1])
+        entry.bind("<Shift-Tab>", lambda e, w=entry: (w.tk_focusPrev().focus_set(), "break")[1])
+
+        # Dirty-marking: any edit marks the settings unsaved, then checks if
+        # the user reverted back to the saved state.
+        def _on_level_change(e, _entry=entry, _i=i):
+            if _entry.edit_modified() and not self._loading:
+                self._unsaved = True
+                self.root.after_idle(self._check_if_clean)
+            _entry.edit_modified(False)
+        entry.bind("<<Modified>>", _on_level_change)
+
+        # Scroll interception: if this Text box has overflow content, consume
+        # the wheel event here and don't let it propagate to the page canvas.
+        # If the box content fits entirely (nothing to scroll), do nothing so
+        # the page canvas handler (added later by _bind_wheel) fires normally.
+        def _on_entry_wheel(e, _txt=entry):
+            lo, hi = _txt.yview()
+            scrolling_down = e.delta < 0
+            scrolling_up   = e.delta > 0
+            at_bottom = hi >= 1.0
+            at_top    = lo <= 0.0
+            if (lo > 0.0 or hi < 1.0) and not (scrolling_down and at_bottom) and not (scrolling_up and at_top):
+                _txt.yview_scroll(int(-1 * (e.delta / 120)), "units")
+                return "break"
+        entry.bind("<MouseWheel>", _on_entry_wheel)
+
+        # Remove button (hidden while there is only one level)
+        remove_btn = ttk.Button(row_frame, text="✕", width=2)
+        remove_btn.grid(row=0, column=2, sticky="e", padx=(0, 0))
+        _Tooltip(remove_btn, "Remove child element")
+
+        def _do_remove(_i=i, _idx=level_idx):
+            self._remove_level(_i, _idx)
+        remove_btn.configure(command=_do_remove)
+
+        record = {"row": row_frame, "entry": entry,
+                  "remove_btn": remove_btn, "indent_lbl": indent_lbl}
+        levels.append(record)
+
+        self._refresh_level_buttons(i)
+
+        if not _loading and not self._loading:
+            self._unsaved = True
+            self.root.after_idle(self._check_if_clean)
+
+        # Let the scrollable canvas know the content height changed.
+        rows_frame.event_generate("<Configure>")
+        return record
+
+    def _remove_level(self, i, level_idx):
+        """Remove the level at *level_idx* from element slot *i*."""
+        levels = self._element_levels[i]
+        if level_idx == 0 or len(levels) <= 1:
+            return   # level 0 can never be removed; always keep at least one level
+
+        record = levels.pop(level_idx)
+        record["row"].destroy()
+
+        # Renumber the remove-button commands so indices stay correct.
+        for new_idx, lv in enumerate(levels):
+            def _do_remove(_i=i, _idx=new_idx):
+                self._remove_level(_i, _idx)
+            lv["remove_btn"].configure(command=_do_remove)
+            # Update indent marker and entry width to match the new index.
+            lv["row"].columnconfigure(0, minsize=new_idx * self._INDENT_PX)
+            if new_idx == 0:
+                lv["indent_lbl"].configure(text="")
+                lv["indent_lbl"].grid_remove()
+            else:
+                lv["indent_lbl"].configure(text="↳")
+                lv["indent_lbl"].grid(row=0, column=0, sticky="e", padx=(0, 2))
+
+        self._refresh_level_buttons(i)
+        if not self._loading:
+            self._unsaved = True
+            self.root.after_idle(self._check_if_clean)
+        self._element_containers[i].event_generate("<Configure>")
+
+    def _refresh_level_buttons(self, i):
+        """Hide the remove button on level 0 (it can never be deleted);
+        show it on all child levels.
+        Also update the Add Child spacer so the button stays one indent level
+        past the current deepest child."""
+        levels = self._element_levels[i]
+        for idx, lv in enumerate(levels):
+            if idx == 0:
+                lv["remove_btn"].grid_remove()
+            else:
+                lv["remove_btn"].grid()
+        spacer = self._element_add_spacers.get(i)
+        if spacer is not None:
+            spacer.configure(width=len(levels) * self._INDENT_PX)
+
+    # -- Elements tab builder ----------------------------------------------------
+
     def _build_elements_tab(self):
         f = self._scrollable_tab("Elements")
         f.columnconfigure(1, weight=1)
@@ -956,44 +1313,85 @@ class WaybackGUI:
             ttk.Label(f, text="Element").grid(
                 row=r, column=0, sticky="nw", padx=(10, 4), pady=3)
 
-            # Multi-line Text widget: wraps long HTML, Enter adds a newline,
-            # newlines are collapsed to spaces on save (settings.txt is line-based).
-            # Match border color to the ttk theme (queried at runtime so it works
-            # across themes). Falls back to a neutral gray if the theme uses
-            # native rendering and doesn't expose a border color string.
-            _border = ttk.Style().lookup("TEntry", "bordercolor") or "#999999"
-            txt = tk.Text(f, width=48, height=3, wrap=tk.WORD,
-                          font=("TkDefaultFont", 9),
-                          relief="flat", borderwidth=0,
-                          highlightthickness=1,
-                          highlightbackground=_border,
-                          highlightcolor=_border,
-                          padx=3, pady=2,
-                          undo=True)
-            txt.grid(row=r, column=1, sticky="ew", padx=(0, 4), pady=3)
-            self._element_text_widgets[f"element_{i}"] = txt
+            # Outer container that holds the level rows + the "Add Child" button.
+            # Using a plain Frame so we can pack children into it dynamically.
+            outer = ttk.Frame(f)
+            outer.grid(row=r, column=1, sticky="ew", padx=(0, 4), pady=3)
+            outer.columnconfigure(0, weight=1)
 
-            # Tab / Shift-Tab move focus out of the text box instead of inserting whitespace.
-            txt.bind("<Tab>",       lambda e, w=txt: (w.tk_focusNext().focus_set(), "break")[1])
-            txt.bind("<Shift-Tab>", lambda e, w=txt: (w.tk_focusPrev().focus_set(), "break")[1])
+            # rows_frame: every level row is packed here top-to-bottom.
+            rows_frame = ttk.Frame(outer)
+            rows_frame.pack(fill="x")
+            rows_frame.columnconfigure(1, weight=1)
 
-            def _on_text_modified(e, _txt=txt):
-                if _txt.edit_modified() and not self._loading:
-                    self._unsaved = True
-                _txt.edit_modified(False)
-            txt.bind("<<Modified>>", _on_text_modified)
+            self._element_levels[i]     = []
+            self._element_containers[i] = rows_frame
+
+            # Seed with one blank level so the element always has an entry.
+            self._add_level(i, value="", _loading=True)
+
+            btn_frame = ttk.Frame(outer)
+            btn_frame.pack(fill="x", pady=(2, 0))
+            add_spacer = tk.Frame(btn_frame, width=self._INDENT_PX, height=1)
+            add_spacer.pack(side="left")
+            add_spacer.pack_propagate(False)
+            self._element_add_spacers[i] = add_spacer
+            add_btn = ttk.Button(
+                btn_frame,
+                text="+  Add Child ",
+                width=14,
+                command=lambda _i=i: self._add_level(_i),
+            )
+            add_btn.pack(side="left")
+            self._element_add_btns[i] = add_btn
+
+            _add_tip = (
+                "Add a child element.\n\n"
+                "Each level narrows the search deeper into the page:\n\n"
+                "Paste an HTML tag from Inspect Element.\n\n"
+                "To target a specific occurrence, place a number directly before the child element:\n"
+                "  <div class=\"row\"> 2<span class=\"value\">text</span>\n"
+                "   -> the 2nd span.value inside div.row\n\n"
+                "Bare numbers after a parent select by child position:\n"
+                "  <div class=\"row\"> 2 3\n"
+                "   -> the 3rd child of the 2nd child of div.row\n\n"
+                "All of these can be combined and stacked freely.")
+            _add_qbtn = ttk.Button(btn_frame, text="?", width=2)
+            _add_qbtn.pack(side="left", padx=(6, 0))
+            _add_tt = _Tooltip(_add_qbtn, _add_tip)
+
+            def _in_canvas_viewport(widget):
+                w = widget.master
+                while w is not None:
+                    if isinstance(w, tk.Canvas):
+                        wy = widget.winfo_rooty()
+                        cy = w.winfo_rooty()
+                        return cy <= wy and (wy + widget.winfo_height()) <= (cy + w.winfo_height())
+                    w = getattr(w, "master", None)
+                return True
+
+            _add_qbtn.bind("<FocusIn>",
+                           lambda e, b=_add_qbtn, tt=_add_tt: tt._show(e) if _in_canvas_viewport(b) else None,
+                           add="+")
+            _add_qbtn.bind("<FocusOut>", _add_tt._hide, add="+")
+
             self._qbtn(f, r, "element"); r += 1
 
             ttk.Label(f, text="Extract").grid(
                 row=r, column=0, sticky="w", padx=(10, 4), pady=3)
-            _ecb = ttk.Combobox(f, textvariable=self._var(f"extract_{i}"),
+            _ecb_frame = ttk.Frame(f)
+            _ecb_frame.grid(row=r, column=1, columnspan=3, sticky="w", padx=(0, 4), pady=3)
+            _ecb = ttk.Combobox(_ecb_frame, textvariable=self._var(f"extract_{i}"),
                          values=EXTRACT_OPTS, state="normal", width=18,
                          height=EXTRACT_HEIGHT)
-            _ecb.grid(row=r, column=1, sticky="w", padx=(0, 4), pady=3)
+            _ecb.pack(side="left")
             _ecb.bind("<<ComboboxSelected>>",
                       lambda e, cb=_ecb: cb.selection_clear(), add="+")
             self._bind_entry_undo(_ecb, f"extract_{i}")
-            self._qbtn(f, r, "extract"); r += 1
+            _ext_qbtn = ttk.Button(_ecb_frame, text="?", width=2, takefocus=False)
+            _ext_qbtn.pack(side="left", padx=(6, 0))
+            _Tooltip(_ext_qbtn, _TIPS.get("extract", ""))
+            r += 1
 
     def _build_schedule_tab(self):
         f = self._scrollable_tab("Schedule")
@@ -1157,6 +1555,15 @@ class WaybackGUI:
                     lambda p: self._entry(p, "threads", 10),
                     tip_key="threads"); r += 1
 
+        self._sep(f, r); r += 1
+        self._section(f, r, "Reset"); r += 1
+        btn_frame = ttk.Frame(f)
+        btn_frame.grid(row=r, column=0, columnspan=4, sticky="w", padx=10, pady=(2, 6))
+        ttk.Button(btn_frame, text="Reset to Last Saved",
+                   command=self._reset_saved).pack(side="left", padx=(0, 4))
+        ttk.Button(btn_frame, text="Reset to Defaults",
+                   command=self._reset_defaults).pack(side="left")
+
     def _build_shortcuts_tab(self):
         f = self._scrollable_tab("Shortcuts")
         f.columnconfigure(1, weight=1)
@@ -1297,8 +1704,50 @@ class WaybackGUI:
             command=banner.destroy,
         ).pack(side="right", padx=(0, 6))
     def _build_ui(self):
+        # Replace Tk's built-in Entry drag-select autoscroll proc.
+        # The default scrolls 2 units AND sets the cursor to @$x (pixel pos under
+        # the mouse).  On the right side x > widget_width, so @$x resolves to a
+        # position several chars past where the view just scrolled, causing the
+        # "teleport" effect.  On the left x < 0 clamps to 0, which is why that
+        # side feels slower/more controlled by comparison.
+        # This replacement scrolls exactly 1 character per 30 ms tick in either
+        # direction, giving consistent, predictable behaviour on both sides.
+        self.root.tk.eval(r"""
+            proc ::tk::EntryAutoScan {w} {
+                variable ::tk::Priv
+                set x $Priv(x)
+                if {![winfo exists $w]} return
+                if {$x >= [winfo width $w]} {
+                    $w xview scroll 1 units
+                    set cur [$w index insert]
+                    set end [$w index end]
+                    if {$cur < $end} {
+                        incr cur
+                        $w icursor $cur
+                        $w selection to $cur
+                    }
+                } elseif {$x < 0} {
+                    $w xview scroll -1 units
+                    set cur [$w index insert]
+                    if {$cur > 0} {
+                        incr cur -1
+                        $w icursor $cur
+                        $w selection to $cur
+                    }
+                } else {
+                    return
+                }
+                set Priv(afterId) [after 30 [list ::tk::EntryAutoScan $w]]
+            }
+        """)
+
         self.notebook = ttk.Notebook(self.root)
         self.notebook.pack(fill="both", expand=True, padx=6, pady=6)
+        # Intercept <<NotebookTabChanged>> at the widget level (fires before the Tcl
+        # class-level TabChangedHandler) so we can suppress the automatic focus-move
+        # to the first widget when switching tabs via keyboard shortcuts.
+        self.notebook.bind("<<NotebookTabChanged>>",
+                           lambda e: "break" if self._switching_tab_kb else None)
 
         self._build_url_tab()
         self._build_elements_tab()
@@ -1325,10 +1774,10 @@ class WaybackGUI:
         right_bar.pack(side="right")
         ttk.Button(right_bar, text="Save Settings",
                    command=self._save).pack(side="left", padx=(0, 4))
-        ttk.Button(right_bar, text="Reset to Last Saved",
-                   command=self._reset_saved).pack(side="left", padx=(0, 4))
-        ttk.Button(right_bar, text="Reset to Defaults",
-                   command=self._reset_defaults).pack(side="left")
+        ttk.Button(right_bar, text="Save Settings As...",
+                   command=self._save_as).pack(side="left", padx=(0, 4))
+        ttk.Button(right_bar, text="Load Settings...",
+                   command=self._load_from).pack(side="left")
 
         # Progress bar
         prog_frame = ttk.Frame(self.root)
@@ -1382,15 +1831,15 @@ class WaybackGUI:
         self.root.bind_class("TCombobox", "<Return>", _open_combo, add="+")
         self.root.bind_class("TCombobox", "<space>",  _open_combo, add="+")
 
-        # Ctrl+Z / Ctrl+Y: undo and redo inside element text boxes.
-        def _redo(e):
+        # Ctrl+Y / Ctrl+Shift+Z: redo inside element Text boxes.
+        def _text_redo(e):
             try:
                 e.widget.edit_redo()
             except tk.TclError:
                 pass
             return "break"
-        self.root.bind_class("Text", "<Control-y>",       _redo, add="+")
-        self.root.bind_class("Text", "<Control-Shift-z>", _redo, add="+")
+        self.root.bind_class("Text", "<Control-y>",       _text_redo, add="+")
+        self.root.bind_class("Text", "<Control-Shift-z>", _text_redo, add="+")
 
         # Apply the configurable shortcuts from settings vars
         self._rebind_shortcuts()
@@ -1430,12 +1879,14 @@ class WaybackGUI:
 
         # -- Navigation callbacks ------------------------------------------
         def _next_tab(e):
-            tabs = self.notebook.tabs()
-            self.notebook.select((self.notebook.index("current") + 1) % len(tabs))
+            self._switching_tab_kb = True
+            self.notebook.select((self.notebook.index("current") + 1) % len(self.notebook.tabs()))
+            self.root.after_idle(lambda: setattr(self, "_switching_tab_kb", False))
             return "break"
         def _prev_tab(e):
-            tabs = self.notebook.tabs()
-            self.notebook.select((self.notebook.index("current") - 1) % len(tabs))
+            self._switching_tab_kb = True
+            self.notebook.select((self.notebook.index("current") - 1) % len(self.notebook.tabs()))
+            self.root.after_idle(lambda: setattr(self, "_switching_tab_kb", False))
             return "break"
 
         _bind_root("next_tab",   _shortcut_to_tk(self._var("shortcut_next_tab").get()),  _next_tab)
@@ -1451,31 +1902,45 @@ class WaybackGUI:
                               self._log_widget.configure(state="disabled")))
 
         # Tab-jump shortcuts (Alt+1 through Alt+7)
+        def _jump_tab(idx):
+            if idx < len(self.notebook.tabs()):
+                self._switching_tab_kb = True
+                self.notebook.select(idx)
+                self.root.after_idle(lambda: setattr(self, "_switching_tab_kb", False))
+
         for i in range(1, 8):
             key   = f"shortcut_tab_{i}"
             idx   = i - 1
             seq   = _shortcut_to_tk(self._var(key).get())
-            _bind_root(f"tab_{i}", seq,
-                       lambda e, _idx=idx: self.notebook.select(_idx)
-                       if _idx < len(self.notebook.tabs()) else None)
+            _bind_root(f"tab_{i}", seq, lambda e, _idx=idx: _jump_tab(_idx))
 
-    # -- Element text-widget sync helpers -------------------------------------
-    def _sync_text_widgets_from_vars(self):
-        """Push StringVar values into the element tk.Text widgets (on load/reset)."""
-        for key, txt in self._element_text_widgets.items():
-            txt.delete("1.0", "end")
-            txt.insert("1.0", self._var(key).get())
-            # Reset the modified flag synchronously so the <<Modified>> event
-            # that Tkinter queues for the delete/insert above is ignored by
-            # _on_text_modified when the event loop eventually processes it.
-            txt.edit_modified(False)
+    # -- Element level sync helpers -------------------------------------------
+    def _sync_element_frames_from_vars(self):
+        """Populate the level rows from the StringVars (called on load/reset)."""
+        for i in range(1, MAX_ELEMENTS + 1):
+            key   = f"element_{i}"
+            raw   = self._var(key).get()
+            parts = self._split_element_levels(raw)
 
-    def _sync_vars_from_text_widgets(self):
-        """Read element tk.Text widgets back into StringVars (before save/run).
-        Newlines are collapsed to a single space so settings.txt stays line-based."""
-        for key, txt in self._element_text_widgets.items():
-            val = txt.get("1.0", "end-1c").replace("\n", " ").strip()
-            self._var(key).set(val)
+            levels     = self._element_levels[i]
+            rows_frame = self._element_containers[i]
+
+            # Destroy all existing rows
+            for lv in levels:
+                lv["row"].destroy()
+            levels.clear()
+
+            # Rebuild from the split parts
+            for part in parts:
+                self._add_level(i, value=part, _loading=True)
+
+            self._refresh_level_buttons(i)
+
+    def _sync_vars_from_element_frames(self):
+        """Read the level entries back into StringVars (called before save/run)."""
+        for i in range(1, MAX_ELEMENTS + 1):
+            val = self._element_get_value(i)
+            self._var(f"element_{i}").set(val)
 
     # -- Settings I/O ----------------------------------------------------------
     def _load_from_file(self):
@@ -1488,7 +1953,7 @@ class WaybackGUI:
         raw = _read_raw_settings()
         for k, v in raw.items():
             self._var(k).set(v)
-        self._sync_text_widgets_from_vars()
+        self._sync_element_frames_from_vars()
         self._loading = False
         self._unsaved = False
         self._update_states()
@@ -1496,7 +1961,7 @@ class WaybackGUI:
         self._apply_always_on_top()
 
     def _save(self):
-        self._sync_vars_from_text_widgets()
+        self._sync_vars_from_element_frames()
         # For disabled fields the StringVar holds the visual default, not the
         # real value - use _disabled_real_values for those keys.
         raw = {k: self._disabled_real_values.get(k, sv.get())
@@ -1536,9 +2001,85 @@ class WaybackGUI:
             raw.setdefault(f"extract_{i}", "text")
         for k, v in raw.items():
             self._var(k).set(v)
-        self._sync_text_widgets_from_vars()
+        self._sync_element_frames_from_vars()
         self._loading = False
         self._unsaved = False
+        self._update_states()
+        self._rebind_shortcuts()
+        self._apply_always_on_top()
+
+    def _save_as(self):
+        """Save current settings to a user-chosen file."""
+        path = filedialog.asksaveasfilename(
+            title="Save Settings As",
+            defaultextension=".txt",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+            initialfile="settings.txt",
+        )
+        if not path:
+            return
+        self._sync_vars_from_element_frames()
+        raw = {k: self._disabled_real_values.get(k, sv.get())
+               for k, sv in self._vars.items()}
+        _write_settings(raw, path=path)
+
+    def _load_from(self):
+        """Load settings from a user-chosen file into the GUI (does not save to settings.txt)."""
+        path = filedialog.askopenfilename(
+            title="Load Settings",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+
+        # Validate: the file must contain at least one recognised settings key.
+        known_keys = set()
+        for line in DEFAULT_SETTINGS.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, _ = line.partition("=")
+            known_keys.add(k.strip().lower())
+
+        found_keys = set()
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, _, _ = line.partition("=")
+                    k = k.strip().lower()
+                    if k in known_keys:
+                        found_keys.add(k)
+        except Exception as e:
+            messagebox.showerror("Load Settings", f"Could not read file:\n{e}")
+            return
+
+        if not found_keys:
+            messagebox.showerror(
+                "Load Settings",
+                "This file does not appear to be a valid settings file.\n\n"
+                "No recognised settings keys were found.",
+            )
+            return
+
+        self._loading = True
+        for key, val in list(self._disabled_real_values.items()):
+            self._var(key).set(val)
+        self._disabled_real_values.clear()
+        raw = _read_raw_settings(path=path)
+        for k, v in raw.items():
+            self._var(k).set(v)
+        self._sync_element_frames_from_vars()
+        self._loading = False
+        # Mark dirty only if the loaded file's values differ from what's currently
+        # saved in settings.txt. Loading the same file should not trigger the
+        # unsaved-changes warning on exit.
+        saved_raw = _read_raw_settings(path=SETTINGS_PATH)
+        self._unsaved = (raw != saved_raw)
+        if not self._unsaved:
+            self._save_snapshot()
         self._update_states()
         self._rebind_shortcuts()
         self._apply_always_on_top()
