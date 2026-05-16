@@ -46,8 +46,6 @@ KNOWN_ATTRS = [
     "alt", "placeholder", "datetime", "action",
 ]
 
-MAX_ELEMENTS = 5
-
 # True when launched by the GUI (which passes --worker). Used to gate
 # output that is only meaningful to the GUI (e.g. [_PROG_] progress ticks).
 _GUI_MODE = "--worker" in sys.argv
@@ -573,18 +571,6 @@ match_child_paths = no
 element_1 = 
 extract_1 = 
 
-element_2 = 
-extract_2 = 
-
-element_3 = 
-extract_3 = 
-
-element_4 = 
-extract_4 = 
-
-element_5 = 
-extract_5 = 
-
 # --- DATE RANGE ------------------------------------------------------------------------------------------
 from_date = 
 to_date = 
@@ -671,10 +657,12 @@ def load_settings(path="settings.txt") -> dict:
             continue
         k, _, v = line.partition("=")
         raw[k.strip().lower()] = v.strip()
-    # extract_N defaults to "text" when blank in DEFAULT_SETTINGS
-    for i in range(1, MAX_ELEMENTS + 1):
-        if not raw.get(f"extract_{i}"):
-            raw[f"extract_{i}"] = "text"
+    # extract_N defaults to "text" when blank — seed for every element_N present
+    for _k in list(raw):
+        if re.match(r'^element_\d+$', _k):
+            _n = _k[len("element_"):]
+            if not raw.get(f"extract_{_n}"):
+                raw[f"extract_{_n}"] = "text"
 
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -687,8 +675,16 @@ def load_settings(path="settings.txt") -> dict:
             key = key.strip().lower().replace("-", "_")
 
             value = value.strip()
-            if key in raw and value:
-                raw[key] = value
+            if value:
+                if key in raw or re.match(r'^(element|extract)_\d+$', key):
+                    raw[key] = value
+
+    # Seed extract defaults for any element_N loaded from the file
+    for _k in list(raw):
+        if re.match(r'^element_\d+$', _k):
+            _n = _k[len("element_"):]
+            if not raw.get(f"extract_{_n}"):
+                raw[f"extract_{_n}"] = "text"
 
     if not raw["url"]:
         sys.exit("[Error] 'url' is missing from settings.txt")
@@ -783,11 +779,17 @@ def load_settings(path="settings.txt") -> dict:
         reformat_pairs = list(zip(label_slots, value_slots))
 
     elements = []
-    for i in range(1, MAX_ELEMENTS + 1):
-        html = raw[f"element_{i}"]
+    # Find all element_N slots, sorted by N, regardless of upper bound
+    slot_nums = sorted(
+        int(m.group(1))
+        for k in raw
+        if (m := re.match(r'^element_(\d+)$', k))
+    )
+    for i in slot_nums:
+        html = raw.get(f"element_{i}", "")
         if not html:
             continue
-        extract = raw[f"extract_{i}"].lower()
+        extract = raw.get(f"extract_{i}", "text").lower()
         if extract != "text" and not extract.startswith("data-") \
                 and extract not in KNOWN_ATTRS:
             sys.exit(
@@ -818,7 +820,8 @@ def load_settings(path="settings.txt") -> dict:
         elements.append({"slot": i, "selector_chain": selector_chain, "selector": selector, "extract": extract})
 
     if not elements:
-        sys.exit("[Error] At least one element_1 through element_5 must be set.")
+        sys.exit("[Error] At least one element_N must be set in settings.txt\n"
+                 "        (e.g. element_1 = <p class=\"...\">...</p>).")
 
     try:
         threads = int(raw["threads"])
@@ -1418,7 +1421,11 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
                                   for v in [extract_value(m, extract)] if v]
                         if values:
                             elem_values[elem["slot"]] = values
-                            lines.append(f"{label}: {', '.join(values)}")
+                            if len(values) == 1:
+                                lines.append(f"{label}: {values[0]}")
+                            else:
+                                for idx, v in enumerate(values, 1):
+                                    lines.append(f"{label} [{idx}]: {v}")
                         else:
                             elem_values[elem["slot"]] = []
                             lines.append(f"{label}: (blank)")

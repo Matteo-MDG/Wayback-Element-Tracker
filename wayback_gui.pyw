@@ -3,7 +3,7 @@ import os
 import re
 import threading
 import requests
-from wayback_element_tracker import DEFAULT_SETTINGS, MAX_ELEMENTS, VERSION, GITHUB_REPO
+from wayback_element_tracker import DEFAULT_SETTINGS, VERSION, GITHUB_REPO
 
 # -- GUI -----------------------------------------------------------------------
 import tkinter as tk
@@ -408,9 +408,11 @@ def _read_raw_settings(path=SETTINGS_PATH):
             continue
         k, _, v = line.partition("=")
         raw[k.strip().lower()] = v.strip()
-    for i in range(1, MAX_ELEMENTS + 1):
-        if not raw.get(f"extract_{i}"):
-            raw[f"extract_{i}"] = "text"
+    # Seed extract defaults for element_N keys present in DEFAULT_SETTINGS
+    for _k in list(raw):
+        if re.match(r'^element_\d+$', _k):
+            _n = _k[len("element_"):]
+            raw.setdefault(f"extract_{_n}", "text")
 
     if not os.path.exists(path):
         return raw
@@ -422,14 +424,28 @@ def _read_raw_settings(path=SETTINGS_PATH):
                 continue
             k, _, v = line.partition("=")
             k = k.strip().lower()
-            if k in raw:
+            # Accept known settings keys and any dynamic element_N / extract_N keys.
+            if k in raw or re.match(r'^(element|extract)_\d+$', k):
                 raw[k] = v.strip()
+
+    # Seed extract defaults for any element_N loaded from the file.
+    for _k in list(raw):
+        if re.match(r'^element_\d+$', _k):
+            _n = _k[len("element_"):]
+            raw.setdefault(f"extract_{_n}", "text")
+
     return raw
 
 
 def _write_settings(raw: dict, path=SETTINGS_PATH):
-    """Re-write settings.txt from *raw*, preserving comments and section headers."""
+    """Re-write settings.txt from *raw*, preserving comments and section headers.
+
+    Element slots are written dynamically (element_1 … element_N in slot order)
+    rather than mirroring the fixed template in DEFAULT_SETTINGS.
+    """
     lines = []
+    _element_block_written = False
+
     for line in DEFAULT_SETTINGS.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#") or "=" not in stripped:
@@ -437,7 +453,35 @@ def _write_settings(raw: dict, path=SETTINGS_PATH):
             continue
         k, _, _ = stripped.partition("=")
         k = k.strip().lower()
+
+        if re.match(r'^(element|extract)_\d+$', k):
+            # On the first element/extract template line, emit all active slots.
+            if not _element_block_written:
+                _element_block_written = True
+                slot_nums = sorted(
+                    int(m.group(1))
+                    for ek in raw
+                    if (m := re.match(r'^element_(\d+)$', ek))
+                    and raw.get(ek, "").strip()
+                )
+                # Only write up to the last non-empty element so that removed
+                # slots (which are cleared to "" in raw) are not persisted.
+                last_nonempty = max(
+                    (n for n in slot_nums if raw.get(f"element_{n}")),
+                    default=0,
+                )
+                for n in slot_nums:
+                    if n > last_nonempty:
+                        break
+                    lines.append(f"element_{n} = {raw.get(f'element_{n}', '')}")
+                    lines.append(f"extract_{n} = {raw.get(f'extract_{n}', 'text')}")
+                    if n < last_nonempty:
+                        lines.append("")
+            # Skip the DEFAULT_SETTINGS template element/extract lines.
+            continue
+
         lines.append(f"{k} = {raw.get(k, '')}")
+
     with open(path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
 
@@ -565,14 +609,21 @@ class WaybackGUI:
 
         self._vars = {}
         self._field_rows = {}
-        # element_1..5 dynamic level UI:
-        #   _element_levels[i]     -> list of {"var": StringVar, "row": Frame, "entry": Entry}
-        #   _element_containers[i] -> the rows_frame that holds the level rows
-        #   _element_add_btns[i]   -> the "+ Add Child" button (for enable/disable)
-        self._element_levels     = {}
-        self._element_containers = {}
-        self._element_add_btns   = {}
-        self._element_add_spacers = {}   # tk.Frame spacers whose width tracks indent depth
+        # Dynamic element slot UI:
+        #   _active_slots              -> ordered list of active slot IDs
+        #   _next_slot                 -> next slot ID to allocate
+        #   _element_levels[sid]       -> list of level dicts for slot sid
+        #   _element_containers[sid]   -> rows_frame holding level rows for slot sid
+        #   _element_add_btns[sid]     -> "+ Add Child" button for slot sid
+        #   _element_add_spacers[sid]  -> indent spacer frame for slot sid
+        #   _element_section_frames[sid] -> {"card", "header_lbl", "sep", "remove_btn"}
+        self._active_slots           = []
+        self._next_slot              = 1
+        self._element_levels         = {}
+        self._element_containers     = {}
+        self._element_add_btns       = {}
+        self._element_add_spacers    = {}
+        self._element_section_frames = {}
         self._running = False
         self._proc = None
         self._run_thread = None
@@ -586,7 +637,6 @@ class WaybackGUI:
         self._wrap_pos     = 0.0     # current pixel position of wrap segment (float)
         self._wrap_job     = None    # root.after() handle for wrap animation tick
 
-        # Parse defaults once for use by _set_state (show-default-when-disabled logic)
         self._defaults = {}
         for line in DEFAULT_SETTINGS.splitlines():
             line = line.strip()
@@ -594,8 +644,11 @@ class WaybackGUI:
                 continue
             k, _, v = line.partition("=")
             self._defaults[k.strip().lower()] = v.strip()
-        for i in range(1, MAX_ELEMENTS + 1):
-            self._defaults.setdefault(f"extract_{i}", "text")
+        # seed extract defaults for any element_N in DEFAULT_SETTINGS
+        for _dk in list(self._defaults):
+            if re.match(r'^element_\d+$', _dk):
+                _dn = _dk[len("element_"):]
+                self._defaults.setdefault(f"extract_{_dn}", "text")
 
         # Unsaved-changes tracking; _loading suppresses dirty-marking and
         # _update_states during bulk var changes (load / reset).
@@ -642,18 +695,29 @@ class WaybackGUI:
         if self._loading or not hasattr(self, "_saved_raw"):
             return
         current = {k: self._disabled_real_values.get(k, sv.get())
-                   for k, sv in self._vars.items()}
-        for i in range(1, MAX_ELEMENTS + 1):
-            current[f"element_{i}"] = self._element_get_value(i)
+                   for k, sv in self._vars.items()
+                   if not re.match(r'^(element|extract)_\d+$', k)}
+        for new_num, slot_id in enumerate(self._active_slots, 1):
+            current[f"element_{new_num}"] = self._element_get_value(slot_id)
+            extract = self._vars.get(f"extract_{slot_id}")
+            current[f"extract_{new_num}"] = extract.get() if extract else "text"
+        current["_slot_count"] = len(self._active_slots)
         if current == self._saved_raw:
             self._unsaved = False
 
     def _save_snapshot(self):
         """Capture the current true state for future dirty-checking."""
+        # Exclude element/extract vars — stale slot vars from removed cards linger
+        # as empty strings and would cause false dirty hits. Use the canonical
+        # renumbered representation instead, mirroring what _check_if_clean does.
         self._saved_raw = {k: self._disabled_real_values.get(k, sv.get())
-                           for k, sv in self._vars.items()}
-        for i in range(1, MAX_ELEMENTS + 1):
-            self._saved_raw[f"element_{i}"] = self._element_get_value(i)
+                           for k, sv in self._vars.items()
+                           if not re.match(r'^(element|extract)_\d+$', k)}
+        for new_num, slot_id in enumerate(self._active_slots, 1):
+            self._saved_raw[f"element_{new_num}"] = self._element_get_value(slot_id)
+            extract = self._vars.get(f"extract_{slot_id}")
+            self._saved_raw[f"extract_{new_num}"] = extract.get() if extract else "text"
+        self._saved_raw["_slot_count"] = len(self._active_slots)
 
     # -- Layout helpers --------------------------------------------------------
     def _scrollable_tab(self, title):
@@ -1231,7 +1295,7 @@ class WaybackGUI:
         # Remove button (hidden while there is only one level)
         remove_btn = ttk.Button(row_frame, text="✕", width=2)
         remove_btn.grid(row=0, column=2, sticky="e", padx=(0, 0))
-        _Tooltip(remove_btn, "Remove child element")
+        _Tooltip(remove_btn, "Remove Child Element")
 
         def _do_remove(_i=i, _idx=level_idx):
             self._remove_level(_i, _idx)
@@ -1299,99 +1363,242 @@ class WaybackGUI:
 
     def _build_elements_tab(self):
         f = self._scrollable_tab("Elements")
-        f.columnconfigure(1, weight=1)
+        f.columnconfigure(0, weight=1)
 
-        EXTRACT_OPTS = ["text", "title", "href", "src", "value", "content",
-                        "alt", "placeholder", "datetime", "action", "data-"]
+        # Container into which element cards are packed dynamically.
+        self._elements_tab_inner   = f
+        self._elements_container   = ttk.Frame(f)
+        self._elements_container.grid(row=0, column=0, sticky="ew")
+        self._elements_container.columnconfigure(0, weight=1)
+
+        # "Add Element" button below the cards.
+        add_bar = ttk.Frame(f)
+        add_bar.grid(row=1, column=0, sticky="w", padx=10, pady=(4, 6))
+        ttk.Button(add_bar, text="+ Add Element", width=14,
+                   command=self._add_element_slot).pack(side="left")
+
+    # -- Dynamic element slot management ----------------------------------------
+
+    def _add_element_slot(self, parts=None, extract="text", _loading=False):
+        """Append a new element card to the Elements tab and return its slot ID."""
+        EXTRACT_OPTS   = ["text", "title", "href", "src", "value", "content",
+                          "alt", "placeholder", "datetime", "action", "data-"]
         EXTRACT_HEIGHT = len(EXTRACT_OPTS)
-        r = 0
-        for i in range(1, MAX_ELEMENTS + 1):
-            if i > 1:
-                self._sep(f, r); r += 1
-            self._section(f, r, f"Element {i}"); r += 1
 
-            ttk.Label(f, text="Element").grid(
-                row=r, column=0, sticky="nw", padx=(10, 4), pady=3)
+        slot_id     = self._next_slot
+        self._next_slot += 1
+        self._active_slots.append(slot_id)
+        display_num = len(self._active_slots)
 
-            # Outer container that holds the level rows + the "Add Child" button.
-            # Using a plain Frame so we can pack children into it dynamically.
-            outer = ttk.Frame(f)
-            outer.grid(row=r, column=1, sticky="ew", padx=(0, 4), pady=3)
-            outer.columnconfigure(0, weight=1)
+        # ---- Card frame -------------------------------------------------------
+        card = ttk.Frame(self._elements_container)
+        card.pack(fill="x", expand=True)
+        card.columnconfigure(1, weight=1)
+        card_r = 0
 
-            # rows_frame: every level row is packed here top-to-bottom.
-            rows_frame = ttk.Frame(outer)
-            rows_frame.pack(fill="x")
-            rows_frame.columnconfigure(1, weight=1)
+        # Separator (not shown for the very first card; created so it can be
+        # toggled when the first card is removed).
+        sep_widget = ttk.Separator(card, orient="horizontal")
+        sep_widget.grid(row=card_r, column=0, columnspan=4, sticky="ew",
+                        padx=8, pady=4)
+        card_r += 1
+        if display_num == 1:
+            sep_widget.grid_remove()   # hidden for first card
 
-            self._element_levels[i]     = []
-            self._element_containers[i] = rows_frame
+        # ---- Section header row ----------------------------------------------
+        header_frame = ttk.Frame(card)
+        header_frame.grid(row=card_r, column=0, columnspan=4, sticky="ew",
+                          padx=10, pady=(8, 2))
+        header_frame.columnconfigure(0, weight=1)
 
-            # Seed with one blank level so the element always has an entry.
-            self._add_level(i, value="", _loading=True)
+        header_lbl = ttk.Label(header_frame,
+                               text=f"Element {display_num}",
+                               font=("TkDefaultFont", 9, "bold"))
+        header_lbl.grid(row=0, column=0, sticky="w")
 
-            btn_frame = ttk.Frame(outer)
-            btn_frame.pack(fill="x", pady=(2, 0))
-            add_spacer = tk.Frame(btn_frame, width=self._INDENT_PX, height=1)
-            add_spacer.pack(side="left")
-            add_spacer.pack_propagate(False)
-            self._element_add_spacers[i] = add_spacer
-            add_btn = ttk.Button(
-                btn_frame,
-                text="+  Add Child ",
-                width=14,
-                command=lambda _i=i: self._add_level(_i),
-            )
-            add_btn.pack(side="left")
-            self._element_add_btns[i] = add_btn
+        remove_elem_btn = ttk.Button(
+            header_frame, text="Remove Element", width=14,
+            command=lambda _sid=slot_id: self._remove_element_slot(_sid),
+        )
+        remove_elem_btn.grid(row=0, column=1, sticky="e")
+        card_r += 1
 
-            _add_tip = (
-                "Add a child element.\n\n"
-                "Each level narrows the search deeper into the page:\n\n"
-                "Paste an HTML tag from Inspect Element.\n\n"
-                "To target a specific occurrence, place a number directly before the child element:\n"
-                "  <div class=\"row\"> 2<span class=\"value\">text</span>\n"
-                "   -> the 2nd span.value inside div.row\n\n"
-                "Bare numbers after a parent select by child position:\n"
-                "  <div class=\"row\"> 2 3\n"
-                "   -> the 3rd child of the 2nd child of div.row\n\n"
-                "All of these can be combined and stacked freely.")
-            _add_qbtn = ttk.Button(btn_frame, text="?", width=2)
-            _add_qbtn.pack(side="left", padx=(6, 0))
-            _add_tt = _Tooltip(_add_qbtn, _add_tip)
+        # ---- Element input rows ----------------------------------------------
+        ttk.Label(card, text="Element").grid(
+            row=card_r, column=0, sticky="nw", padx=(10, 4), pady=3)
 
-            def _in_canvas_viewport(widget):
-                w = widget.master
-                while w is not None:
-                    if isinstance(w, tk.Canvas):
-                        wy = widget.winfo_rooty()
-                        cy = w.winfo_rooty()
-                        return cy <= wy and (wy + widget.winfo_height()) <= (cy + w.winfo_height())
-                    w = getattr(w, "master", None)
-                return True
+        outer = ttk.Frame(card)
+        outer.grid(row=card_r, column=1, sticky="ew", padx=(0, 4), pady=3)
+        outer.columnconfigure(0, weight=1)
 
-            _add_qbtn.bind("<FocusIn>",
-                           lambda e, b=_add_qbtn, tt=_add_tt: tt._show(e) if _in_canvas_viewport(b) else None,
-                           add="+")
-            _add_qbtn.bind("<FocusOut>", _add_tt._hide, add="+")
+        rows_frame = ttk.Frame(outer)
+        rows_frame.pack(fill="x")
+        rows_frame.columnconfigure(1, weight=1)
 
-            self._qbtn(f, r, "element"); r += 1
+        self._element_levels[slot_id]     = []
+        self._element_containers[slot_id] = rows_frame
 
-            ttk.Label(f, text="Extract").grid(
-                row=r, column=0, sticky="w", padx=(10, 4), pady=3)
-            _ecb_frame = ttk.Frame(f)
-            _ecb_frame.grid(row=r, column=1, columnspan=3, sticky="w", padx=(0, 4), pady=3)
-            _ecb = ttk.Combobox(_ecb_frame, textvariable=self._var(f"extract_{i}"),
-                         values=EXTRACT_OPTS, state="normal", width=18,
-                         height=EXTRACT_HEIGHT)
-            _ecb.pack(side="left")
-            _ecb.bind("<<ComboboxSelected>>",
-                      lambda e, cb=_ecb: cb.selection_clear(), add="+")
-            self._bind_entry_undo(_ecb, f"extract_{i}")
-            _ext_qbtn = ttk.Button(_ecb_frame, text="?", width=2, takefocus=False)
-            _ext_qbtn.pack(side="left", padx=(6, 0))
-            _Tooltip(_ext_qbtn, _TIPS.get("extract", ""))
-            r += 1
+        # Create the Add Child bar and register the spacer BEFORE calling
+        # _add_level, so _refresh_level_buttons can correctly set the spacer
+        # width on every level added during loading.  btn_frame is packed
+        # into outer only after the level rows so it appears below them.
+        btn_frame  = ttk.Frame(outer)
+        add_spacer = tk.Frame(btn_frame, width=self._INDENT_PX, height=1)
+        add_spacer.pack(side="left")
+        add_spacer.pack_propagate(False)
+        self._element_add_spacers[slot_id] = add_spacer
+        add_btn = ttk.Button(btn_frame, text="+  Add Child ", width=14,
+                             command=lambda _sid=slot_id: self._add_level(_sid))
+        add_btn.pack(side="left")
+        self._element_add_btns[slot_id] = add_btn
+
+        for part in (parts or [""]):
+            self._add_level(slot_id, value=part, _loading=_loading or self._loading)
+
+        # Pack btn_frame below the level rows.
+        btn_frame.pack(fill="x", pady=(2, 0))
+
+        _add_tip = (
+            "Add a child element.\n\n"
+            "Each level narrows the search deeper into the page:\n\n"
+            "Paste an HTML tag from Inspect Element.\n\n"
+            "To target a specific occurrence, place a number directly before the child element:\n"
+            "  <div class=\"row\"> 2<span class=\"value\">text</span>\n"
+            "   -> the 2nd span.value inside div.row\n\n"
+            "Bare numbers after a parent select by child position:\n"
+            "  <div class=\"row\"> 2 3\n"
+            "   -> the 3rd child of the 2nd child of div.row\n\n"
+            "All of these can be combined and stacked freely.")
+        _add_qbtn = ttk.Button(btn_frame, text="?", width=2)
+        _add_qbtn.pack(side="left", padx=(6, 0))
+        _add_tt = _Tooltip(_add_qbtn, _add_tip)
+
+        def _in_canvas_viewport(widget):
+            w = widget.master
+            while w is not None:
+                if isinstance(w, tk.Canvas):
+                    wy = widget.winfo_rooty()
+                    cy = w.winfo_rooty()
+                    return cy <= wy and (wy + widget.winfo_height()) <= (cy + w.winfo_height())
+                w = getattr(w, "master", None)
+            return True
+
+        _add_qbtn.bind("<FocusIn>",
+                       lambda e, b=_add_qbtn, tt=_add_tt:
+                           tt._show(e) if _in_canvas_viewport(b) else None,
+                       add="+")
+        _add_qbtn.bind("<FocusOut>", _add_tt._hide, add="+")
+
+        # ? button for the element field (column 3)
+        q_btn = ttk.Button(card, text="?", width=2, takefocus=False)
+        q_btn.grid(row=card_r, column=3, sticky="nw", padx=(2, 8), pady=2)
+        q_tt = _Tooltip(q_btn, _TIPS.get("element", ""))
+
+        q_btn.bind("<FocusIn>",
+                   lambda e, b=q_btn, tt=q_tt:
+                       tt._show(e) if _in_canvas_viewport(b) else None,
+                   add="+")
+        q_btn.bind("<FocusOut>", q_tt._hide, add="+")
+        card_r += 1
+
+        # ---- Extract row -----------------------------------------------------
+        ttk.Label(card, text="Extract").grid(
+            row=card_r, column=0, sticky="w", padx=(10, 4), pady=3)
+        _ecb_frame = ttk.Frame(card)
+        _ecb_frame.grid(row=card_r, column=1, columnspan=3, sticky="w",
+                        padx=(0, 4), pady=3)
+        _ecb = ttk.Combobox(_ecb_frame,
+                            textvariable=self._var(f"extract_{slot_id}"),
+                            values=EXTRACT_OPTS, state="normal",
+                            width=18, height=EXTRACT_HEIGHT)
+        _ecb.pack(side="left")
+        _ecb.bind("<<ComboboxSelected>>",
+                  lambda e, cb=_ecb: cb.selection_clear(), add="+")
+        self._bind_entry_undo(_ecb, f"extract_{slot_id}")
+
+        # Set extract value without triggering dirty-marking
+        _prev_loading = self._loading
+        self._loading = True
+        self._var(f"extract_{slot_id}").set(extract if extract else "text")
+        self._loading = _prev_loading
+
+        _ext_qbtn = ttk.Button(_ecb_frame, text="?", width=2, takefocus=False)
+        _ext_qbtn.pack(side="left", padx=(6, 0))
+        _Tooltip(_ext_qbtn, _TIPS.get("extract", ""))
+        card_r += 1
+
+        # ---- Store card metadata --------------------------------------------
+        self._element_section_frames[slot_id] = {
+            "card":        card,
+            "header_lbl":  header_lbl,
+            "sep":         sep_widget,
+            "remove_btn":  remove_elem_btn,
+        }
+
+        self._refresh_element_remove_btns()
+
+        if not (_loading or self._loading):
+            self._unsaved = True
+            self.root.after_idle(self._check_if_clean)
+
+        # Notify the scrollable canvas that content height changed.
+        self._elements_container.event_generate("<Configure>")
+        return slot_id
+
+    def _remove_element_slot(self, slot_id):
+        """Remove an element slot card from the Elements tab."""
+        if len(self._active_slots) <= 1:
+            return   # always keep at least one slot
+
+        info = self._element_section_frames.pop(slot_id, None)
+        if info:
+            info["card"].destroy()
+
+        self._active_slots.remove(slot_id)
+
+        for d in (self._element_levels, self._element_containers,
+                  self._element_add_btns, self._element_add_spacers):
+            d.pop(slot_id, None)
+
+        # Clear the vars for this slot so they don't pollute the written file.
+        for k in (f"element_{slot_id}", f"extract_{slot_id}"):
+            if k in self._vars:
+                _prev = self._loading
+                self._loading = True
+                self._vars[k].set("")
+                self._loading = _prev
+
+        self._refresh_element_headers()
+        self._refresh_element_remove_btns()
+
+        if not self._loading:
+            self._unsaved = True
+            self.root.after_idle(self._check_if_clean)
+
+        self._elements_container.event_generate("<Configure>")
+
+    def _refresh_element_headers(self):
+        """Renumber section headers after an add or remove."""
+        for display_num, slot_id in enumerate(self._active_slots, 1):
+            info = self._element_section_frames.get(slot_id)
+            if not info:
+                continue
+            info["header_lbl"].configure(text=f"Element {display_num}")
+            sep = info.get("sep")
+            if sep:
+                if display_num == 1:
+                    sep.grid_remove()
+                else:
+                    sep.grid()
+
+    def _refresh_element_remove_btns(self):
+        """Disable the Remove button when only one slot remains."""
+        only_one = len(self._active_slots) <= 1
+        for slot_id in self._active_slots:
+            info = self._element_section_frames.get(slot_id)
+            if info and "remove_btn" in info:
+                info["remove_btn"].configure(
+                    state="disabled" if only_one else "normal")
 
     def _build_schedule_tab(self):
         f = self._scrollable_tab("Schedule")
@@ -1917,30 +2124,54 @@ class WaybackGUI:
     # -- Element level sync helpers -------------------------------------------
     def _sync_element_frames_from_vars(self):
         """Populate the level rows from the StringVars (called on load/reset)."""
-        for i in range(1, MAX_ELEMENTS + 1):
-            key   = f"element_{i}"
-            raw   = self._var(key).get()
-            parts = self._split_element_levels(raw)
+        # Destroy all existing slot cards.
+        for slot_id in list(self._active_slots):
+            info = self._element_section_frames.pop(slot_id, None)
+            if info:
+                info["card"].destroy()
+            for d in (self._element_levels, self._element_containers,
+                      self._element_add_btns, self._element_add_spacers):
+                d.pop(slot_id, None)
+        self._active_slots.clear()
+        self._next_slot = 1
 
-            levels     = self._element_levels[i]
-            rows_frame = self._element_containers[i]
+        # Rebuild from consecutive element_N / extract_N vars.
+        n = 1
+        while f"element_{n}" in self._vars:
+            val         = self._vars[f"element_{n}"].get()
+            extract_var = self._vars.get(f"extract_{n}")
+            extract     = extract_var.get() if extract_var else "text"
+            parts       = self._split_element_levels(val)
+            self._add_element_slot(parts=parts, extract=extract, _loading=True)
+            n += 1
 
-            # Destroy all existing rows
-            for lv in levels:
-                lv["row"].destroy()
-            levels.clear()
+        # Always keep at least one slot.
+        if not self._active_slots:
+            self._add_element_slot(_loading=True)
 
-            # Rebuild from the split parts
-            for part in parts:
-                self._add_level(i, value=part, _loading=True)
-
-            self._refresh_level_buttons(i)
+        self._refresh_element_headers()
 
     def _sync_vars_from_element_frames(self):
-        """Read the level entries back into StringVars (called before save/run)."""
-        for i in range(1, MAX_ELEMENTS + 1):
-            val = self._element_get_value(i)
-            self._var(f"element_{i}").set(val)
+        """Read the level entries back into StringVars (called before save/run).
+
+        Slots are renumbered 1..N in their display order so the written settings
+        file always has contiguous element_1 … element_N keys.
+        """
+        # Clear all existing element/extract vars so stale keys don't linger.
+        _prev = self._loading
+        self._loading = True
+        for k in list(self._vars):
+            if re.match(r'^(element|extract)_\d+$', k):
+                self._vars[k].set("")
+        # Write active slots in order, renumbered from 1.
+        for new_num, slot_id in enumerate(self._active_slots, 1):
+            self._vars[f"element_{new_num}"] = self._vars.get(
+                f"element_{new_num}", tk.StringVar(value=""))
+            self._var(f"element_{new_num}").set(self._element_get_value(slot_id))
+            extract = self._vars.get(f"extract_{slot_id}")
+            self._var(f"extract_{new_num}").set(
+                extract.get() if extract else "text")
+        self._loading = _prev
 
     # -- Settings I/O ----------------------------------------------------------
     def _load_from_file(self):
@@ -1997,8 +2228,10 @@ class WaybackGUI:
             raw[k.strip().lower()] = v.strip()
         self._loading = True
         self._disabled_real_values.clear()
-        for i in range(1, MAX_ELEMENTS + 1):
-            raw.setdefault(f"extract_{i}", "text")
+        for _dk in list(raw):
+            if re.match(r'^element_\d+$', _dk):
+                _dn = _dk[len("element_"):]
+                raw.setdefault(f"extract_{_dn}", "text")
         for k, v in raw.items():
             self._var(k).set(v)
         self._sync_element_frames_from_vars()
@@ -2050,7 +2283,7 @@ class WaybackGUI:
                         continue
                     k, _, _ = line.partition("=")
                     k = k.strip().lower()
-                    if k in known_keys:
+                    if k in known_keys or re.match(r'^(element|extract)_\d+$', k):
                         found_keys.add(k)
         except Exception as e:
             messagebox.showerror("Load Settings", f"Could not read file:\n{e}")
