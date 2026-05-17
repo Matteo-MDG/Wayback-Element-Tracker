@@ -316,13 +316,13 @@ _TIPS = {
         "Multiple indexes separated by spaces.\n"
         "The index of the label element is paired with the index of the value element at the\n"
         "same position."
+        "   e.g. for label_elements = 1 2 and value_elements = 3 4, elements 1\n"
+        " and 3 are paired and elements 2 and 4 are paired."
     ),
     "value_elements": (
         "The index of the element(s) whose output become the VALUES in the reformatted file.\n\n"
         "e.g. 3 will treat element_3 as the value to track.\n\n"
-        "Multiple indexes separated by spaces.\n"
-        "For label_elements = 1 2 and value_elements = 3 4, elements 1 and 3 are paired and\n"
-        "elements 2 and 4 are paired."
+        "Multiple indexes separated by spaces."
     ),
     "sort": (
         "How to order the label rows / columns in the reformatted file:\n\n"
@@ -334,8 +334,8 @@ _TIPS = {
         "When a label first appears partway through the timeline, places a 0 before its first value.\n\n"
         "no            -> disabled\n"
         "adjacent  -> places 0 in the cell directly before the first value\n"
-        "snapshot -> places 0 in the snapshot before the first value\n"
-        "               (only effective when result_padding is enabled)"
+        "snapshot -> places 0 in the snapshot before the first value\n\n"
+        "only effective when result_padding is enabled"
     ),
     "fill_first": (
         "Also place a 0 before labels whose first value appears at the very start of the timeline."
@@ -345,6 +345,24 @@ _TIPS = {
         "Has no effect otherwise.\n\n"
         "grouped     -> all data rows for all groups appear first, then all url rows, then all error rows at the bottom\n"
         "interleaved -> each filter has a group label, then url, then error, then that filter's data rows"
+    ),
+    "label_merge": (
+        "Merge labels that are the same characters but differ only in case, spaces, or separators.\n\n"
+        "e.g. 'value-1', 'Value 1', and 'VALUE_1' are treated as the same label.\n\n"
+        "yes -> merge equivalent labels into one row/column\n"
+        "no  -> treat each distinct string as a separate label"
+    ),
+    "label_strip_separators": (
+        "Remove '-' and '_' characters from labels before writing them to the output.\n\n"
+        "e.g. 'element-1' becomes 'element 1', 'my_value' becomes 'my value'.\n\n"
+        "Enabled automatically when label_merge = yes."
+    ),
+    "label_case": (
+        "How to display labels in the reformatted file.\n\n"
+        "first_seen -> use the label exactly as it first appears\n"
+        "lower        -> convert to lowercase\n"
+        "upper        -> convert to UPPERCASE\n"
+        "sentence   -> Capitalize first letter, rest lowercase"
     ),
     "headless_browser": (
         "Use a headless Chromium browser to fetch every snapshot instead of a plain HTTP request.\n\n"
@@ -659,7 +677,7 @@ class WaybackGUI:
         self._build_ui()
         self._load_from_file()   # sets _loading=False and calls _update_states()
         self._rebind_shortcuts() # re-register now that vars hold their loaded values
-        for key in ("frequency", "headless_browser", "reformat", "split_output"):
+        for key in ("frequency", "headless_browser", "reformat", "split_output", "label_merge"):
             self._var(key).trace_add("write", self._update_states)
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -1066,17 +1084,25 @@ class WaybackGUI:
         return cb
 
     # -- Tab builders ----------------------------------------------------------
-    def _set_state(self, key, disabled, reason=""):
+    def _set_state(self, key, disabled, reason="", display=None):
         row = self._field_rows.get(key)
         if not row:
             return
         w, lbl, btn = row["widget"], row["label"], row["qbtn"]
         # Values to display when a field is disabled (may differ from the default).
+        # display= overrides the per-key defaults when provided.
         _disabled_display = {"threads": "1"}
 
         # Update the hover tooltips on the widget and label.
         # When disabled: show the reason; when enabled: clear (tooltip won't appear).
-        tip_text = f"Disabled because {reason}" if (disabled and reason) else ""
+        # If the locked display value is "yes", the field is effectively enabled by the reason.
+        if disabled and reason:
+            _disabled_display_check = {"threads": "1"}
+            shown_val = display if display is not None else _disabled_display_check.get(key, self._defaults.get(key, ""))
+            state_word = "Enabled" if shown_val == "yes" else "Disabled"
+            tip_text = f"{state_word} because {reason}"
+        else:
+            tip_text = ""
         for tt_key in ("widget_tt", "label_tt"):
             tt = row.get(tt_key)
             if tt:
@@ -1088,7 +1114,8 @@ class WaybackGUI:
             if key not in self._disabled_real_values:
                 self._disabled_real_values[key] = self._var(key).get()
             self._loading = True
-            self._var(key).set(_disabled_display.get(key, self._defaults.get(key, "")))
+            shown = display if display is not None else _disabled_display.get(key, self._defaults.get(key, ""))
+            self._var(key).set(shown)
             self._loading = False
             w.configure(state="disabled")
             lbl.configure(foreground="gray")
@@ -1114,16 +1141,25 @@ class WaybackGUI:
         split_files = self._var("split_output").get() == "files"
         not_merged  = self._var("split_output").get() != "merged"
 
-        self._set_state("sample_from",        freq_all,              "frequency = all")
-        self._set_state("result_padding",      freq_all,              "frequency = all")
-        self._set_state("min_gap",             freq_all,              "frequency = all")
-        self._set_state("fallback_candidates", freq_all,              "frequency = all")
-        self._set_state("threads",             headless,              "headless_browser = yes")
-        self._set_state("label_elements",      no_reformat,           "reformat = no")
-        self._set_state("value_elements",      no_reformat,           "reformat = no")
-        self._set_state("sort",                no_reformat,           "reformat = no")
-        self._set_state("zero_fill",           no_reformat,           "reformat = no")
-        self._set_state("fill_first",          no_reformat,           "reformat = no")
+        self._set_state("sample_from",           freq_all,    "frequency = all")
+        self._set_state("result_padding",         freq_all,    "frequency = all")
+        self._set_state("min_gap",                freq_all,    "frequency = all")
+        self._set_state("fallback_candidates",    freq_all,    "frequency = all")
+        self._set_state("threads",                headless,    "headless_browser = yes")
+        self._set_state("label_elements",         no_reformat, "reformat = no")
+        self._set_state("value_elements",         no_reformat, "reformat = no")
+        self._set_state("sort",                   no_reformat, "reformat = no")
+        self._set_state("zero_fill",              no_reformat, "reformat = no")
+        self._set_state("fill_first",             no_reformat, "reformat = no")
+        self._set_state("label_merge",            no_reformat, "reformat = no")
+        self._set_state("label_case",             no_reformat, "reformat = no")
+
+        # label_strip_separators: locked to yes when label_merge = yes, else normal
+        merge_on = not no_reformat and self._var("label_merge").get() == "yes"
+        if merge_on:
+            self._set_state("label_strip_separators", True, "label_merge = yes", display="yes")
+        else:
+            self._set_state("label_strip_separators", no_reformat, "reformat = no")
 
         if freq_all and split_files:
             cp_reason = "frequency = all and split_output = files"
@@ -1710,10 +1746,17 @@ class WaybackGUI:
         self._field(f, r, "Value Elements",
                     lambda p: self._entry(p, "value_elements", 20),
                     tip_key="value_elements"); r += 1
+
+        self._sep(f, r); r += 1
+        self._section(f, r, "Labels"); r += 1
         self._field(f, r, "Sort",
                     lambda p: self._combo(p, "sort",
                     ["alphabet", "reverse", "unsorted"]),
                     tip_key="sort"); r += 1
+        self._field(f, r, "Label Case",
+                    lambda p: self._combo(p, "label_case",
+                    ["first_seen", "lower", "upper", "sentence"]),
+                    tip_key="label_case"); r += 1
         self._field(f, r, "Zero Fill",
                     lambda p: self._combo(p, "zero_fill",
                     ["no", "adjacent", "snapshot"]),
@@ -1721,6 +1764,18 @@ class WaybackGUI:
         self._field(f, r, "Fill First",
                     lambda p: self._combo(p, "fill_first", YES_NO),
                     tip_key="fill_first"); r += 1
+
+        self._sep(f, r); r += 1
+        self._section(f, r, "Label Merging"); r += 1
+        self._field(f, r, "Label Strip Separators",
+                    lambda p: self._combo(p, "label_strip_separators", YES_NO),
+                    tip_key="label_strip_separators"); r += 1
+        self._field(f, r, "Label Merge",
+                    lambda p: self._combo(p, "label_merge", YES_NO),
+                    tip_key="label_merge"); r += 1
+
+        self._sep(f, r); r += 1
+        self._section(f, r, "Merged Output"); r += 1
         self._field(f, r, "Merged Meta",
                     lambda p: self._combo(p, "merged_meta",
                     ["interleaved", "grouped"]),
@@ -2514,6 +2569,8 @@ class WaybackGUI:
 
 
     def _poll_log(self):
+        MAX_LINES_PER_TICK = 200  # safety valve for extreme bursts
+
         # -- Pass 1: drain every queued item, split into progress signals vs log lines.
         # Progress signals are processed immediately regardless of queue depth so the
         # bar always reflects the latest state even during heavy output bursts.
@@ -2541,18 +2598,30 @@ class WaybackGUI:
         except _queue.Empty:
             pass
 
-        # -- Pass 2: insert all pending log text.
-        for chunk in pending_log:
+        # -- Pass 2: insert pending log text as a single batched operation.
+        # Joining all chunks into one string and doing a single configure/insert/
+        # configure call costs roughly the same as inserting one line, regardless
+        # of how many lines arrived.  This mirrors how the Windows console coalesces
+        # output before it hits the display layer, keeping the main thread free.
+        # The cap guards against pathological bursts; overflow is re-queued for the
+        # next tick so no lines are ever dropped.
+        batch    = pending_log[:MAX_LINES_PER_TICK]
+        overflow = pending_log[MAX_LINES_PER_TICK:]
+
+        if batch:
             # Check scroll position BEFORE inserting – after insertion the
             # bottom fraction drops below 1.0 because new content extends
             # past the viewport, making a post-insert check always look like
             # the user has scrolled up even when they haven't.
             at_bottom = self._log_widget.yview()[1] >= 0.999
             self._log_widget.configure(state="normal")
-            self._log_widget.insert("end", chunk)
+            self._log_widget.insert("end", "".join(batch))
             if at_bottom:
                 self._log_widget.see("end")
             self._log_widget.configure(state="disabled")
+
+        for chunk in reversed(overflow):
+            self._log_q.queue.appendleft(chunk)
 
         self.root.after(100, self._poll_log)
 

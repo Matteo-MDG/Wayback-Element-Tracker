@@ -383,6 +383,19 @@ How to order the label rows / columns in the reformatted file:
 <br>
 <br>
 
+`label_case`  
+How to display labels in the reformatted file:
+
+| label_case | Description |
+|---|---|
+| `first_seen` | use the label exactly as it first appears |
+| `lower` | convert to lowercase |
+| `upper` | convert to UPPERCASE |
+| `sentence` | Capitalize first letter, rest lowercase |
+
+<br>
+<br>
+
 `zero_fill`  
 When a label first appears partway through the timeline, places a `0` before its first value.
 
@@ -406,6 +419,19 @@ Controls where snapshot URLs and errors appear in the reformatted file when `spl
 |---|---|
 | `grouped` | all data rows for all groups appear first, then all `url (suffix)` rows, then all `error (suffix)` rows at the bottom |
 | `interleaved` | each filter has a group label, then `url (suffix)`, `error (suffix)`, then that filter's data rows |
+
+<br>
+<br>
+
+`label_strip_separators`  
+Replace `-` and `_` characters in labels with spaces before writing them to the output. (`yes` / `no`)  
+e.g. `element-1` becomes `element 1`, `my_value` becomes `my value`.  
+Enabled automatically when `label_merge = yes`.  
+<br>
+<br>
+`label_merge`  
+Merge labels that are the same characters but differ only in case, spaces, or separators. (`yes` / `no`)  
+e.g. `value-1`, `Value 1`, and `VALUE_1` are all treated as the same label.
 
 <br>
 

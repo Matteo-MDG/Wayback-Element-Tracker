@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-VERSION = "v2.3.1"
+VERSION = "v2.4.0"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -608,6 +608,9 @@ sort = alphabet
 zero_fill = no
 fill_first = no
 merged_meta = interleaved
+label_merge = no
+label_strip_separators = no
+label_case = first_seen
 
 # --- FETCH MODE ------------------------------------------------------------------------------------------
 headless_browser = no
@@ -871,6 +874,9 @@ def load_settings(path="settings.txt") -> dict:
         "sort": sort,
         "zero_fill": raw["zero_fill"].strip().lower(),
         "fill_first": yesno(raw["fill_first"]),
+        "label_merge": yesno(raw.get("label_merge", "no")),
+        "label_strip_separators": yesno(raw.get("label_strip_separators", "yes" if yesno(raw.get("label_merge", "no")) else "no")),
+        "label_case": raw.get("label_case", "first_seen").strip().lower(),
         "split_output": raw["split_output"].strip().lower(),
         "merged_meta": raw["merged_meta"].strip().lower(),
         "match_child_paths": yesno(raw["match_child_paths"]),
@@ -879,6 +885,9 @@ def load_settings(path="settings.txt") -> dict:
 
     if cfg["zero_fill"] not in ("no", "adjacent", "snapshot"):
         sys.exit("[Error] 'zero_fill' must be 'no', 'adjacent', or 'snapshot'.")
+
+    if cfg["label_case"] not in ("first_seen", "lower", "upper", "sentence"):
+        sys.exit("[Error] 'label_case' must be 'first_seen', 'lower', 'upper', or 'sentence'.")
 
     if cfg["split_output"] not in ("no", "files", "merged"):
         sys.exit("[Error] 'split_output' must be 'no', 'files', or 'merged'.")
@@ -1759,6 +1768,91 @@ def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
         f" -> {os.path.abspath(output_path)}")
 
 
+def url_slug(label: str) -> str:
+    """
+    If *label* looks like a URL or path, return just the final non-empty path
+    segment (everything after the last '/', with query strings and fragments
+    stripped).  Otherwise return the label unchanged.
+
+    Handles three forms:
+      - Absolute URLs  (http:// or https:// or //)
+      - Root-relative paths (/web/20230101/https://example.com/page)
+        — the form Wayback Machine uses when rewriting href attributes
+      - Plain strings with no path structure — returned unchanged
+
+    Examples
+    --------
+    https://example.com/products/widget-pro?ref=nav     ->  widget-pro
+    /web/20230101000000/https://example.com/products/p  ->  p
+    https://example.com/section/                        ->  section
+    https://example.com/                                ->  example.com  (hostname fallback)
+    not-a-url                                           ->  not-a-url
+    """
+    s = label.strip()
+    if not s:
+        return s
+    is_absolute = s.startswith("http://") or s.startswith("https://") or s.startswith("//")
+    is_relative = not is_absolute and s.startswith("/")
+    if not is_absolute and not is_relative:
+        return s
+    try:
+        if is_absolute:
+            parsed = urlparse(s)
+            path = parsed.path.rstrip("/")
+            if path:
+                segment = path.rsplit("/", 1)[-1]
+                if segment:
+                    segment = unquote(segment)
+                    dot = segment.rfind(".")
+                    if dot > 0:
+                        ext = segment[dot + 1:]
+                        if ext.isalpha() and 2 <= len(ext) <= 5:
+                            segment = segment[:dot]
+                    return segment
+            host = parsed.netloc or parsed.path
+            return host if host else s
+        else:
+            # Root-relative path: strip query string and fragment, then take
+            # the last non-empty segment.  This handles Wayback Machine's
+            # /web/TIMESTAMP/ORIGINAL_URL rewritten href format.
+            path = s.split("?")[0].split("#")[0].rstrip("/")
+            if path and path != "/":
+                segment = path.rsplit("/", 1)[-1]
+                if segment:
+                    segment = unquote(segment)
+                    dot = segment.rfind(".")
+                    if dot > 0:
+                        ext = segment[dot + 1:]
+                        if ext.isalpha() and 2 <= len(ext) <= 5:
+                            segment = segment[:dot]
+                    return segment
+    except Exception:
+        pass
+    return s
+
+
+def _merge_key(s: str) -> str:
+    """Return a normalized merge key: lowercase alphanumeric only.
+    Used to detect labels that are the same modulo case, whitespace, and separators.
+    e.g. 'Value-1', 'value 1', 'VALUE_1' all map to 'value1'.
+    """
+    return re.sub(r'[^a-z0-9]', '', s.lower())
+
+
+def _apply_label_case(s: str, mode: str, strip_separators: bool = False) -> str:
+    """Apply a case transformation to a label string for display in the output.
+    If strip_separators is True, replaces '-' and '_' characters with spaces first."""
+    if strip_separators:
+        s = s.replace("-", " ").replace("_", " ")
+    if mode == "lower":
+        return s.lower()
+    if mode == "upper":
+        return s.upper()
+    if mode == "sentence":
+        return s[:1].upper() + s[1:].lower() if s else s
+    return s  # first_seen: keep exactly as first encountered
+
+
 def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
     """
     Write a merged reformatted CSV for all groups into one file.
@@ -1803,6 +1897,13 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
             log(f"[Reformat] Skipping merged reformat: required slot not tracked.")
             return
 
+    def _norm(lbl):
+        return url_slug(lbl)
+
+    do_merge   = cfg.get("label_merge", False)
+    label_case = cfg.get("label_case", "first_seen")
+    strip_seps = cfg.get("label_strip_separators", False)
+
     def build_group_data(g_results):
         g_results = apply_padding(g_results, cfg)
         snap_dates  = [r["date"]  if r else "" for r in g_results]
@@ -1813,11 +1914,24 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
         pair_data = []
         for label_slot, value_slot in pairs:
             seen_labels, seen_set = [], set()
+            merge_key_to_display: dict = {}
             for r in g_results:
                 if not r: continue
                 for lbl in r["elem_values"].get(label_slot, []):
-                    if lbl and lbl not in seen_set:
-                        seen_labels.append(lbl); seen_set.add(lbl)
+                    norm = _norm(lbl)
+                    if not norm:
+                        continue
+                    if do_merge:
+                        mkey = _merge_key(norm)
+                        if mkey and mkey not in seen_set:
+                            display = _apply_label_case(norm, label_case, strip_seps)
+                            seen_labels.append(display)
+                            seen_set.add(mkey)
+                            merge_key_to_display[mkey] = display
+                    else:
+                        display = _apply_label_case(norm, label_case, strip_seps)
+                        if display not in seen_set:
+                            seen_labels.append(display); seen_set.add(display)
             if sort_mode == "alphabet":
                 ordered = sorted(seen_labels, key=lambda x: x.lower())
             elif sort_mode == "reverse":
@@ -1827,10 +1941,20 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
             snap_maps = []
             for r in g_results:
                 if not r: snap_maps.append({}); continue
-                lbls = r["elem_values"].get(label_slot, [])
+                lbls = [_norm(l) for l in r["elem_values"].get(label_slot, [])]
                 vals = r["elem_values"].get(value_slot, [])
-                snap_maps.append({lbls[i]: vals[i] if i < len(vals) else ""
-                                  for i in range(len(lbls))})
+                snap_map: dict = {}
+                for i, slug_key in enumerate(lbls):
+                    if do_merge:
+                        mkey = _merge_key(slug_key)
+                        display = merge_key_to_display.get(mkey)
+                        if display is not None and display not in snap_map:
+                            snap_map[display] = vals[i] if i < len(vals) else ""
+                    else:
+                        display = _apply_label_case(slug_key, label_case, strip_seps)
+                        if display and display not in snap_map:
+                            snap_map[display] = vals[i] if i < len(vals) else ""
+                snap_maps.append(snap_map)
             pair_data.append((ordered, snap_maps))
 
         zero_cols: dict = {}
@@ -2070,10 +2194,25 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
             return
 
     # -- Build ordered labels and snap_maps for each pair ---------------------
+    def normalise_label(lbl):
+        return url_slug(lbl)
+
+    do_merge   = cfg.get("label_merge", False)
+    label_case = cfg.get("label_case", "first_seen")
+    strip_seps = cfg.get("label_strip_separators", False)
+
     def build_pair(label_slot, value_slot):
-        all_labels = [v for r in results if r for v in r["elem_values"].get(label_slot, [])]
+        all_raw_labels = [normalise_label(v)
+                          for r in results if r
+                          for v in r["elem_values"].get(label_slot, [])]
         all_values = [v for r in results if r for v in r["elem_values"].get(value_slot, [])]
-        if len(set(all_labels)) <= 1:
+
+        if do_merge:
+            unique_label_count = len(set(_merge_key(l) for l in all_raw_labels if _merge_key(l)))
+        else:
+            unique_label_count = len(set(_apply_label_case(l, label_case, strip_seps) for l in all_raw_labels))
+
+        if unique_label_count <= 1:
             log(f"[Reformat] Skipping pair ({label_slot}->{value_slot}): "
                 f"label element has only one unique value across all snapshots.")
             return None, None
@@ -2084,13 +2223,26 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
 
         seen_labels: list = []
         seen_set: set = set()
+        merge_key_to_display: dict = {}
         for r in results:
             if not r:
                 continue
             for lbl in r["elem_values"].get(label_slot, []):
-                if lbl and lbl not in seen_set:
-                    seen_labels.append(lbl)
-                    seen_set.add(lbl)
+                norm = normalise_label(lbl)
+                if not norm:
+                    continue
+                if do_merge:
+                    mkey = _merge_key(norm)
+                    if mkey and mkey not in seen_set:
+                        display = _apply_label_case(norm, label_case, strip_seps)
+                        seen_labels.append(display)
+                        seen_set.add(mkey)
+                        merge_key_to_display[mkey] = display
+                else:
+                    display = _apply_label_case(norm, label_case, strip_seps)
+                    if display not in seen_set:
+                        seen_labels.append(display)
+                        seen_set.add(display)
 
         if sort_mode == "alphabet":
             ordered_labels = sorted(seen_labels, key=lambda x: x.lower())
@@ -2104,10 +2256,22 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
             if not r:
                 snap_maps.append({})
                 continue
-            lbls = r["elem_values"].get(label_slot, [])
+            lbls = [normalise_label(l) for l in r["elem_values"].get(label_slot, [])]
             vals = r["elem_values"].get(value_slot, [])
-            snap_maps.append({lbls[i]: vals[i] if i < len(vals) else ""
-                              for i in range(len(lbls))})
+            # When multiple raw labels collapse to the same key, keep the
+            # first encountered value for that key within this snapshot.
+            snap_map: dict = {}
+            for i, slug_key in enumerate(lbls):
+                if do_merge:
+                    mkey = _merge_key(slug_key)
+                    display = merge_key_to_display.get(mkey)
+                    if display is not None and display not in snap_map:
+                        snap_map[display] = vals[i] if i < len(vals) else ""
+                else:
+                    display = _apply_label_case(slug_key, label_case, strip_seps)
+                    if display and display not in snap_map:
+                        snap_map[display] = vals[i] if i < len(vals) else ""
+            snap_maps.append(snap_map)
         return ordered_labels, snap_maps
 
     pair_data = []
@@ -2369,7 +2533,8 @@ def main():
         log(f"  Fallbacks  : {cfg['fallback_candidates']} candidate(s) per period")
     if cfg["reformat"]:
         pairs_str = "  ".join(f"{ls}->{vs}" for ls, vs in cfg["reformat_pairs"])
-        log(f"  Reformat   : yes  |  pairs: {pairs_str}  |  sort: {cfg['sort']}")
+        merge_str = f"  |  merge: {cfg['label_case']}" if cfg["label_merge"] else ""
+        log(f"  Reformat   : yes  |  pairs: {pairs_str}  |  sort: {cfg['sort']}{merge_str}")
     if cfg["split_output"] != "no":
         log(f"  Split out  : {cfg['split_output']}")
     fetch_mode = "headless Chromium" if cfg["headless_browser"] else "HTTP request"
