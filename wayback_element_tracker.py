@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-VERSION = "v2.2.0"
+VERSION = "v2.3.1"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -1387,11 +1387,11 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
                 if buffered:
                     lines.extend(extra_lines)
 
+                # First pass: traverse selectors and collect values for every element
+                elem_results = []
                 for elem in cfg["elements"]:
                     sel_chain = elem["selector_chain"]
                     extract = elem["extract"]
-                    sel_display = elem["selector"]
-                    label = f"  {sel_display:<{max_sel_len}}"
 
                     current_scope = [soup]
                     for step in sel_chain:
@@ -1414,21 +1414,45 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
                         current_scope = next_scope
                     matches = current_scope
                     if not matches:
-                        elem_values[elem["slot"]] = []
-                        lines.append(f"{label}: (no element)")
+                        raw_values = None   # sentinel: element not found
                     else:
-                        values = [v for m in matches
-                                  for v in [extract_value(m, extract)] if v]
-                        if values:
-                            elem_values[elem["slot"]] = values
-                            if len(values) == 1:
-                                lines.append(f"{label}: {values[0]}")
-                            else:
-                                for idx, v in enumerate(values, 1):
-                                    lines.append(f"{label} [{idx}]: {v}")
-                        else:
-                            elem_values[elem["slot"]] = []
-                            lines.append(f"{label}: (blank)")
+                        raw_values = [v for m in matches
+                                      for v in [extract_value(m, extract)] if v]
+                    elem_results.append((elem, raw_values))
+
+                # Compute the max label column width so colons align across all
+                # elements and all index variants.  For multi-value elements the
+                # label is "selector[N]", so factor in the bracket width.
+                max_label_width = max_sel_len
+                for elem, raw_values in elem_results:
+                    if raw_values and len(raw_values) > 1:
+                        bracket_width = len(f"[{len(raw_values)}]")
+                        max_label_width = max(
+                            max_label_width,
+                            len(elem["selector"]) + bracket_width,
+                        )
+
+                # Second pass: record elem_values and build console lines
+                for elem, raw_values in elem_results:
+                    sel_display = elem["selector"]
+                    if raw_values is None:
+                        elem_values[elem["slot"]] = []
+                        label = f"  {sel_display:<{max_label_width}}"
+                        lines.append(f"{label}: (no element)")
+                    elif not raw_values:
+                        elem_values[elem["slot"]] = []
+                        label = f"  {sel_display:<{max_label_width}}"
+                        lines.append(f"{label}: (blank)")
+                    elif len(raw_values) == 1:
+                        elem_values[elem["slot"]] = raw_values
+                        label = f"  {sel_display:<{max_label_width}}"
+                        lines.append(f"{label}: {raw_values[0]}")
+                    else:
+                        elem_values[elem["slot"]] = raw_values
+                        for idx, v in enumerate(raw_values, 1):
+                            indexed_name = f"{sel_display}[{idx}]"
+                            label = f"  {indexed_name:<{max_label_width}}"
+                            lines.append(f"{label}: {v}")
 
                 emit(index, "\n".join(lines))
                 return {

@@ -1514,6 +1514,11 @@ class WaybackGUI:
         _ecb.pack(side="left")
         _ecb.bind("<<ComboboxSelected>>",
                   lambda e, cb=_ecb: cb.selection_clear(), add="+")
+        # Prevent a blank extract: reset to "text" if the user clears the field.
+        def _on_extract_focusout(e, _sid=slot_id):
+            if not self._var(f"extract_{_sid}").get().strip():
+                self._var(f"extract_{_sid}").set("text")
+        _ecb.bind("<FocusOut>", _on_extract_focusout, add="+")
         self._bind_entry_undo(_ecb, f"extract_{slot_id}")
 
         # Set extract value without triggering dirty-marking
@@ -2157,6 +2162,16 @@ class WaybackGUI:
         Slots are renumbered 1..N in their display order so the written settings
         file always has contiguous element_1 … element_N keys.
         """
+        # Snapshot extract values by slot_id BEFORE clearing vars, because the
+        # clearing loop zeroes the very StringVars the comboboxes are bound to.
+        # Reading them after clearing would always yield "" instead of the
+        # user's chosen value (elements are safe because _element_get_value
+        # reads from the Text widget directly, not from a StringVar).
+        extract_snapshot = {}
+        for slot_id in self._active_slots:
+            ev = self._vars.get(f"extract_{slot_id}")
+            extract_snapshot[slot_id] = (ev.get() if ev else "") or "text"
+
         # Clear all existing element/extract vars so stale keys don't linger.
         _prev = self._loading
         self._loading = True
@@ -2168,9 +2183,8 @@ class WaybackGUI:
             self._vars[f"element_{new_num}"] = self._vars.get(
                 f"element_{new_num}", tk.StringVar(value=""))
             self._var(f"element_{new_num}").set(self._element_get_value(slot_id))
-            extract = self._vars.get(f"extract_{slot_id}")
             self._var(f"extract_{new_num}").set(
-                extract.get() if extract else "text")
+                extract_snapshot.get(slot_id) or "text")
         self._loading = _prev
 
     # -- Settings I/O ----------------------------------------------------------
@@ -2500,8 +2514,6 @@ class WaybackGUI:
 
 
     def _poll_log(self):
-        MAX_LINES_PER_TICK = 30  # don't hog the main thread on bursts of log text
-
         # -- Pass 1: drain every queued item, split into progress signals vs log lines.
         # Progress signals are processed immediately regardless of queue depth so the
         # bar always reflects the latest state even during heavy output bursts.
@@ -2529,9 +2541,8 @@ class WaybackGUI:
         except _queue.Empty:
             pass
 
-        # -- Pass 2: insert log text, capped so we don't freeze the UI on bursts.
-        # Any lines beyond the cap are re-queued at the front for the next tick.
-        for chunk in pending_log[:MAX_LINES_PER_TICK]:
+        # -- Pass 2: insert all pending log text.
+        for chunk in pending_log:
             # Check scroll position BEFORE inserting – after insertion the
             # bottom fraction drops below 1.0 because new content extends
             # past the viewport, making a post-insert check always look like
@@ -2542,9 +2553,6 @@ class WaybackGUI:
             if at_bottom:
                 self._log_widget.see("end")
             self._log_widget.configure(state="disabled")
-
-        for chunk in reversed(pending_log[MAX_LINES_PER_TICK:]):
-            self._log_q.queue.appendleft(chunk)
 
         self.root.after(100, self._poll_log)
 
