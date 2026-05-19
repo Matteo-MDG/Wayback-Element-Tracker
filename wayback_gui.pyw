@@ -122,299 +122,8 @@ def _capture_shortcut(root, var, btn):
 
     _handler[0] = root.bind("<KeyPress>", _on_key, add="+")
 
-# -- Tooltip texts (sourced from README) ---------------------------------------
-_TIPS = {
-    "url": (
-        "The full URL of the page to track.\n"
-        "e.g.  https://www.example.com"
-    ),
-    "filter_any": (
-        "URL must match at least ONE filter, or will be skipped.\n\n"
-        "(blank)      -> match only the exact URL, no variants\n"
-        "*                -> include all URL variants\n"
-        "/subpage  -> match URLs where /subpage appears at the end of the path\n"
-        "key=value -> match only URLs containing key=value as a query parameter\n"
-        "[filter]*      -> substring match anywhere in the URL\n"
-        "                  e.g. key=* matches both key=1 and key=2\n"
-        "                         /subpage* matches /subpage-a and /subpage-b\n"
-        "![filter]      -> exclude instead of include\n"
-        "                      (works with all of the above)\n\n"
-        "e.g.  /images  key=value  !page=2"
-    ),
-    "filter_all": (
-        "URL must match EVERY filter, or will be skipped.\n\n"
-        "Same filter syntax as filter_any.\n\n"
-        "Both fields can be used independently or together."
-    ),
-    "case_sensitive": (
-        "Whether filter matching is case sensitive."
-    ),
-    "match_child_paths": (
-        "Whether URL path filters (e.g. /subpage) also match pages deeper in the URL.\n\n"
-        "yes -> /subpage also matches /subpage/child, /subpage/child/page, etc.\n"
-        "no  -> /subpage matches only example.com/subpage exactly\n\n"
-        "Note: substring filters like /subpage* always match child paths regardless of this setting."
-    ),
-    "element": (
-        "The HTML element to track.\n"
-        "Paste the HTML tag from Inspect Element.\n\n"
-        "To narrow the search by parent / child elements, either:\n"
-        "   -> Use the \"Add Child\" button to add each level separately, or\n"
-        "   -> Type everything in the parent box, separated by spaces\n\n"
-        "Parent before child, separated by spaces:\n"
-        "  <div class=\"row\"> <span class=\"value\">5%</span>\n\n"
-        "To target a specific occurrence, place a number directly before the child element:\n"
-        "  <div class=\"row\"> 2<span class=\"value\">text</span>\n"
-        "   -> the 2nd span.value inside div.row\n\n"
-        "Bare numbers after a parent select by child position:\n"
-        "  <div class=\"row\"> 2 3\n"
-        "   -> the 3rd child of the 2nd child of div.row\n\n"
-        "All of these can be combined and stacked freely."
-    ),
-    "extract": (
-        "What to extract from the element:\n\n"
-        "text              -> visible text inside the element\n"
-        "title              -> title=\"...\" attribute\n"
-        "href              -> href=\"...\" attribute (links)\n"
-        "src                -> src=\"...\" attribute (images, scripts)\n"
-        "value            -> value=\"...\" attribute (inputs)\n"
-        "content        -> content=\"...\" attribute (meta tags)\n"
-        "alt                 -> alt=\"...\" attribute (image descriptions)\n"
-        "placeholder -> placeholder=\"...\" attribute (input hints)\n"
-        "datetime      -> datetime=\"...\" attribute (time elements)\n"
-        "action           -> action=\"...\" attribute (forms)\n"
-        "data-*           -> any custom data attribute\n"
-        "                           e.g. data-count, data-value\n\n"
-        "If a selector matches multiple elements on the page, all of\n"
-        "them are captured as separately numbered columns or rows."
-    ),
-    "from_date": (
-        "Start of the date range to search.\n"
-        "Format: YYYYMMDD\n\n"
-        "Leave blank to search all available snapshots."
-    ),
-    "to_date": (
-        "End of the date range to search.\n"
-        "Format: YYYYMMDD\n\n"
-        "Leave blank to include up to the most recent snapshot."
-    ),
-    "frequency": (
-        "Frequency of snapshots to check:\n\n"
-        "all          -> every available snapshot\n"
-        "hourly    -> one snapshot per hour\n"
-        "daily      -> one snapshot per day\n"
-        "weekly   -> one snapshot per week\n"
-        "monthly -> one snapshot per month\n"
-        "yearly     -> one snapshot per year"
-    ),
-    "sample_from": (
-        "Which snapshot to pick within each frequency period:\n\n"
-        "start     -> the snapshot closest to the START of the period\n"
-        "middle -> the snapshot closest to the MIDDLE of the period\n"
-        "end      -> the snapshot closest to the END of the period\n\n"
-        "Has no effect when frequency = all."
-    ),
-    "collision_priority": (
-        "When multiple URL variants have snapshots in the same time period, determines\n"
-        "which one is preferred:\n\n"
-        "time -> the variant whose timestamp is closest to the sample_from anchor wins\n"
-        "filter -> earlier listed filter_any filters take priority over later ones\n\n"
-        "Has no effect when no URL variants are tracked, or when split_output = files."
-    ),
-    "convention": (
-        "us             -> month first  (November 5, 2023)\n"
-        "european -> day first    (5 November 2023)"
-    ),
-    "date_style": (
-        "long       -> November 5, 2023  /  5 November 2023\n"
-        "short      -> Nov 5, 2023  /  5 Nov 2023\n"
-        "numeric -> 11/5/2023  /  5/11/2023"
-    ),
-    "year_digits": (
-        "4 -> 2023\n"
-        "2 -> 23"
-    ),
-    "date_padding": (
-        "yes -> 11/05/2023\n"
-        "no  -> 11/5/2023"
-    ),
-    "time_format": (
-        "12h -> 2:30 PM\n"
-        "24h -> 14:30"
-    ),
-    "time_padding": (
-        "yes -> 06:50\n"
-        "no  -> 6:50"
-    ),
-    "show_seconds": "Show seconds in the time?",
-    "show_month": (
-        "Show the month in the output CSV?"
-    ),
-    "show_day": (
-        "Show the day in the output CSV?"
-    ),
-    "show_year": (
-        "Show the year in the output CSV?"
-    ),
-    "show_time": (
-        "Show the time in the output CSV?"
-    ),
-    "output": (
-        "CSV file name.\n\n"
-        "After each run, a .log file is saved alongside the CSV with\n"
-        "the same base name. Each new program execution is added to\n"
-        "the end of the log file, which will track the last 10 runs."
-    ),
-    "file_override": (
-        "Whether to overwrite the output file if it already exists.\n\n"
-        "yes -> overwrite\n"
-        "no  -> add an incrementing counter instead\n"
-        "            e.g.  wayback_results.csv\n"
-        "                    wayback_results_1.csv\n"
-        "                    wayback_results_2.csv"
-    ),
-    "csv_layout": (
-        "columns -> each attribute is a column, each snapshot is a row\n"
-        "                    date | time | element | url | error\n\n"
-        "rows       -> each attribute is a row, each snapshot is a column\n"
-        "                    date | Jan 1 | Feb 1 | ...\n"
-        "                    elem | value | value | ...\n\n"
-        "The url column contains the full Wayback Machine URL of each snapshot.\n"
-        "The error column is blank on success, or contains the failure reason\n"
-        "(e.g. timeout, HTTP 404).\n\n"
-        "When an element cannot be extracted, its cell is left empty.\n"
-        "The console output distinguishes two cases:\n"
-        "   (no element) -> element was not found anywhere on the page\n"
-        "   (blank)           -> element was found but the extracted value was empty"
-    ),
-    "result_padding": (
-        "Insert blank rows/columns for time periods\n"
-        "with no archived snapshots.\n\n"
-        "yes -> Jan 1 | Feb 1 | Mar 1 | ...\n"
-        "           value |        | value | ...\n\n"
-        "no  -> Jan 1 | Mar 1 | ...\n"
-        "           value | value | ...\n\n"
-        "Has no effect when frequency = all."
-    ),
-    "split_output": (
-        "no          -> all variants written into one file; collisions resolved by collision_priority\n"
-        "files       -> one output file per URL variant or filter\n"
-        "merged -> one output file containing all filter groups separately"
-    ),
-    "reformat": (
-        "Writes an additional [filename]_reformatted CSV per raw output file.\n\n"
-        "Pairs two elements - one as a label and one as a value for that label.\n"
-        "Moves each value element into one row (or column) per unique label.\n\n"
-        "e.g.\n"
-        "  date | Jan 1 | Feb 1 | ...        date  | Jan 1 | Feb 1 | ...\n"
-        "  elem | label | label | ...  ->  label | value | value | ...\n"
-        "  elem | value | value | ..."
-    ),
-    "label_elements": (
-        "The index of the element(s) whose output become the LABELS in the reformatted file.\n\n"
-        "e.g. 2 will treat element_2 as the label.\n\n"
-        "Multiple indexes separated by spaces.\n"
-        "The index of the label element is paired with the index of the value element at the\n"
-        "same position."
-        "   e.g. for label_elements = 1 2 and value_elements = 3 4, elements 1\n"
-        " and 3 are paired and elements 2 and 4 are paired."
-    ),
-    "value_elements": (
-        "The index of the element(s) whose output become the VALUES in the reformatted file.\n\n"
-        "e.g. 3 will treat element_3 as the value to track.\n\n"
-        "Multiple indexes separated by spaces."
-    ),
-    "sort": (
-        "How to order the label rows / columns in the reformatted file:\n\n"
-        "unsorted -> labels appear in first-seen order\n"
-        "alphabet -> alphabetical A\u2013Z (case insensitive)\n"
-        "reverse    -> alphabetical Z\u2013A (case insensitive)"
-    ),
-    "zero_fill": (
-        "When a label first appears partway through the timeline, places a 0 before its first value.\n\n"
-        "no            -> disabled\n"
-        "adjacent  -> places 0 in the cell directly before the first value\n"
-        "snapshot -> places 0 in the snapshot before the first value\n\n"
-        "only effective when result_padding is enabled"
-    ),
-    "fill_first": (
-        "Also place a 0 before labels whose first value appears at the very start of the timeline."
-    ),
-    "merged_meta": (
-        "Controls where snapshot URLs and errors appear in the reformatted file when split_output = merged.\n"
-        "Has no effect otherwise.\n\n"
-        "grouped     -> all data rows for all groups appear first, then all url rows, then all error rows at the bottom\n"
-        "interleaved -> each filter has a group label, then url, then error, then that filter's data rows"
-    ),
-    "label_merge": (
-        "Merge labels that are the same characters but differ only in case, spaces, or separators.\n\n"
-        "e.g. 'value-1', 'Value 1', and 'VALUE_1' are treated as the same label.\n\n"
-        "yes -> merge equivalent labels into one row/column\n"
-        "no  -> treat each distinct string as a separate label"
-    ),
-    "label_strip_separators": (
-        "Remove '-' and '_' characters from labels before writing them to the output.\n\n"
-        "e.g. 'element-1' becomes 'element 1', 'my_value' becomes 'my value'.\n\n"
-        "Enabled automatically when label_merge = yes."
-    ),
-    "label_case": (
-        "How to display labels in the reformatted file.\n\n"
-        "first_seen -> use the label exactly as it first appears\n"
-        "lower        -> convert to lowercase\n"
-        "upper        -> convert to UPPERCASE\n"
-        "sentence   -> Capitalize first letter, rest lowercase"
-    ),
-    "headless_browser": (
-        "Use a headless Chromium browser to fetch every snapshot instead of a plain HTTP request.\n\n"
-        "Enable this when the regular fetch consistently returns blank or missing values that are visible\n"
-        "when loading the page in a real browser.\n"
-        "This executes each page's JavaScript fully before extracting elements, which is needed when\n"
-        "a site populates element content with JavaScript.\n\n"
-        "Note: significantly slower and resource intensive than the default method.\n"
-        "Chromium (~300 MB) is downloaded automatically on first use."
-    ),
-    "min_gap": (
-        "Minimum gap between 2 consecutive selected snapshots, as a fraction\n"
-        "of the frequency period.\n"
-        "Snapshots closer together than this are compared and the one farther\n"
-        "from its anchor is discarded.\n\n"
-        "0.5 -> half the period\n"
-        "           e.g. ~15 days for monthly, 12 hours for daily\n"
-        "0    -> disabled\n\n"
-        "Has no effect when frequency = all."
-    ),
-    "delay": (
-        "Seconds to wait between retry attempts and between CDX query retries."
-    ),
-    "retries": (
-        "How many times to retry a failing snapshot or CDX query before giving up.\n\n"
-        "Note: HTTP 404 and 403 responses are not retried, they fail immediately."
-    ),
-    "fallback_candidates": (
-        "When a snapshot fails, how many closest snapshots from the same time period\n"
-        "to try before giving up.\n\n"
-        "Any snapshot farther than `min_gap` from the selected snapshot is excluded.\n"
-        "Has no effect when frequency = all."
-    ),
-    "end_passes": (
-        "After the main run finishes, retry all still-failed snapshots this many times.\n\n"
-        "Each end pass makes one attempt per failed snapshot with no retries,\n"
-        "separated by the delay interval. Useful for recovering snapshots that\n"
-        "failed due to transient errors (timeouts, rate limiting) during the main run.\n\n"
-        "0 -> disabled"
-    ),
-    "threads": (
-        "Number of parallel threads for fetching snapshots.\n\n"
-        "Has no effect when headless_browser = yes."
-    ),
-    "shortcut_focus_log": (
-        "Focuses the output log panel so you can scroll through it or select\n"
-        "and copy text without having to click it with the mouse."
-    ),
-    "always_on_top": (
-        "Keep the window on top of all other windows."
-    ),
-}
+# -- Tooltip texts ------------------------------------------------------------
+from wayback_dialogs import _TIPS, _DIALOGS, _ERRORS
 
 
 def _read_raw_settings(path=SETTINGS_PATH):
@@ -628,20 +337,39 @@ class WaybackGUI:
         self._vars = {}
         self._field_rows = {}
         # Dynamic element slot UI:
-        #   _active_slots              -> ordered list of active slot IDs
-        #   _next_slot                 -> next slot ID to allocate
-        #   _element_levels[sid]       -> list of level dicts for slot sid
-        #   _element_containers[sid]   -> rows_frame holding level rows for slot sid
-        #   _element_add_btns[sid]     -> "+ Add Child" button for slot sid
-        #   _element_add_spacers[sid]  -> indent spacer frame for slot sid
-        #   _element_section_frames[sid] -> {"card", "header_lbl", "sep", "remove_btn"}
-        self._active_slots           = []
-        self._next_slot              = 1
-        self._element_levels         = {}
-        self._element_containers     = {}
-        self._element_add_btns       = {}
-        self._element_add_spacers    = {}
-        self._element_section_frames = {}
+        #   _active_slots                 -> ordered list of active slot IDs
+        #   _next_slot                    -> next slot ID to allocate
+        #   _element_levels[sid]          -> list of level dicts for slot sid
+        #   _element_level0_containers[sid] -> frame holding ONLY the level-0 row
+        #   _element_containers[sid]      -> frame holding child rows (levels 1+)
+        #   _element_add_btns[sid]        -> "+ Add Child" button for slot sid
+        #   _element_add_spacers[sid]     -> indent spacer frame for slot sid
+        #   _element_section_frames[sid]  -> {"card", "header_lbl", "sep", "remove_btn"}
+        self._active_slots              = []
+        self._next_slot                 = 1
+        self._element_levels            = {}
+        self._element_level0_containers = {}
+        self._element_containers        = {}
+        self._element_add_btns          = {}
+        self._element_add_spacers       = {}
+        self._element_section_frames    = {}
+        # Dynamic pair slot UI (reformat tab):
+        #   _pair_entries      -> list of {lvar, vvar, lframe, vframe, le, ve} dicts
+        #   _pairs_l_container -> Frame holding L-entry columns
+        #   _pairs_v_container -> Frame holding V-entry columns
+        #   _pairs_add_btn     -> "+" button
+        #   _pairs_rem_btn     -> "−" remove-last-pair button
+        #   _pairs_lbl_widgets -> [Label Elements label, Value Elements label]
+        #   _pairs_qbtns       -> [? btn for label_elements, ? btn for value_elements]
+        self._pair_entries           = []
+        self._pairs_l_container      = None
+        self._pairs_v_container      = None
+        self._pairs_add_btn          = None
+        self._pairs_rem_btn          = None
+        self._pairs_add_wrap         = None
+        self._pairs_rem_wrap         = None
+        self._pairs_lbl_widgets      = []
+        self._pairs_qbtns            = []
         self._running = False
         self._proc = None
         self._run_thread = None
@@ -742,19 +470,33 @@ class WaybackGUI:
         outer = ttk.Frame(self.notebook)
         self.notebook.add(outer, text=title)
 
+        # Use grid on outer so the horizontal scrollbar spans the full width
+        # (including the column occupied by the vertical scrollbar).
+        # Layout:  col 0 = canvas, col 1 = vsb
+        #          row 0 = canvas/vsb, row 1 = hsb (spans both columns)
+        outer.columnconfigure(0, weight=1)
+        outer.rowconfigure(0, weight=1)
+
         canvas = tk.Canvas(outer, borderwidth=0, highlightthickness=0)
-        vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        vsb = ttk.Scrollbar(outer, orient="vertical",   command=canvas.yview)
+        hsb = ttk.Scrollbar(outer, orient="horizontal", command=canvas.xview)
         inner = ttk.Frame(canvas)
 
         cw = canvas.create_window((0, 0), window=inner, anchor="nw")
-        canvas.configure(yscrollcommand=vsb.set)
-        canvas.pack(side="left", fill="both", expand=True)
-        # scrollbar packed on demand below
+        canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        # Canvas always in (row=0, col=0); scrollbars shown on demand via grid/grid_remove
+        canvas.grid(row=0, column=0, sticky="nsew")
 
         def _wheel(e):
-            # Only scroll canvas if content is taller than the viewport
+            # Only scroll vertically if content is taller than the viewport
             if inner.winfo_reqheight() > canvas.winfo_height():
                 canvas.yview_scroll(int(-1 * (e.delta / 120)) * 2, "units")
+
+        def _hwheel(e):
+            # Only scroll horizontally if content is wider than the viewport
+            if inner.winfo_reqwidth() > canvas.winfo_width():
+                canvas.xview_scroll(int(-1 * (e.delta / 120)) * 2, "units")
 
         def _combo_wheel(e):
             # Scroll the canvas, and block the combobox from cycling its value
@@ -768,30 +510,82 @@ class WaybackGUI:
             if wid not in _wheel_bound:
                 _wheel_bound.add(wid)
                 if isinstance(widget, ttk.Combobox):
-                    widget.bind("<MouseWheel>", _combo_wheel, add="+")
+                    widget.bind("<MouseWheel>",       _combo_wheel, add="+")
                 else:
-                    widget.bind("<MouseWheel>", _wheel, add="+")
+                    widget.bind("<MouseWheel>",       _wheel,  add="+")
+                    widget.bind("<Shift-MouseWheel>", _hwheel, add="+")
             for child in widget.winfo_children():
                 _bind_wheel(child)
 
-        canvas.bind("<MouseWheel>", _wheel)
+        canvas.bind("<MouseWheel>",       _wheel)
+        canvas.bind("<Shift-MouseWheel>", _hwheel)
+
+        _vsb_shown = [False]
+        _hsb_shown = [False]
+
+        def _check_scrollbars():
+            need_v = inner.winfo_reqheight() > canvas.winfo_height()
+            need_h = inner.winfo_reqwidth()  > canvas.winfo_width()
+            if need_v != _vsb_shown[0]:
+                _vsb_shown[0] = need_v
+                if need_v:
+                    vsb.grid(row=0, column=1, sticky="ns")
+                else:
+                    vsb.grid_remove()
+            if need_h != _hsb_shown[0]:
+                _hsb_shown[0] = need_h
+                if need_h:
+                    # columnspan=2 so it runs under both the canvas and the vsb
+                    hsb.grid(row=1, column=0, columnspan=2, sticky="ew")
+                else:
+                    hsb.grid_remove()
+
+        def _trigger_scroll_check():
+            """Force-update the canvas window width and recheck scrollbars.
+
+            Call this whenever content inside inner may have grown beyond the
+            canvas width in a way that doesn't cause inner's own <Configure>
+            to fire (e.g. a sticky='w' child growing inside a weight-1 column).
+            """
+            req_w = inner.winfo_reqwidth()
+            c_w   = canvas.winfo_width()
+            new_w = max(c_w, req_w) if c_w > 1 else req_w
+            canvas.itemconfig(cw, width=new_w)
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            _check_scrollbars()
+
+        # Attach to inner so callers that only hold a reference to inner can
+        # trigger a scroll update without knowing about the canvas internals.
+        inner._trigger_scroll_check = _trigger_scroll_check
+
+        def _scroll_to_show_right():
+            """Scroll horizontally so the right edge of inner's content is visible.
+
+            Called after a new pair entry is added so the new box is immediately
+            visible without the user having to scroll manually.
+            """
+            # Force all pending geometry passes to complete first — specifically
+            # the ? button repack — before measuring the scrollregion, otherwise
+            # winfo_reqwidth() stops at the last entry and clips the ? button.
+            canvas.update_idletasks()
+            _trigger_scroll_check()
+            canvas.xview_moveto(1.0)
+
+        inner._scroll_to_show_right = _scroll_to_show_right
 
         def _on_inner_configure(e):
+            req_w = inner.winfo_reqwidth()
+            c_w   = canvas.winfo_width()
+            canvas.itemconfig(cw, width=max(c_w, req_w) if c_w > 1 else req_w)
             canvas.configure(scrollregion=canvas.bbox("all"))
             _bind_wheel(inner)
-            # Show/hide scrollbar based on whether content overflows
-            if inner.winfo_reqheight() > canvas.winfo_height():
-                vsb.pack(side="right", fill="y")
-            else:
-                vsb.pack_forget()
+            canvas.after_idle(_check_scrollbars)
 
         def _on_canvas_configure(e):
-            canvas.itemconfig(cw, width=e.width)
-            # Re-check scrollbar visibility when window is resized
-            if inner.winfo_reqheight() > e.height:
-                vsb.pack(side="right", fill="y")
-            else:
-                vsb.pack_forget()
+            # Expand inner to fill the canvas width, but never shrink it below
+            # its own requested width so horizontally-growing content is preserved.
+            canvas.itemconfig(cw, width=max(e.width, inner.winfo_reqwidth()))
+            canvas.after_idle(_check_scrollbars)
 
         inner.bind("<Configure>", _on_inner_configure)
         canvas.bind("<Configure>", _on_canvas_configure)
@@ -801,7 +595,8 @@ class WaybackGUI:
         # don't wrap correctly until the next configure cycle.  Scheduling a
         # second pass after idle ensures the correct width is applied on load.
         def _force_reflow():
-            canvas.itemconfig(cw, width=canvas.winfo_width())
+            canvas.itemconfig(cw, width=max(canvas.winfo_width(),
+                                            inner.winfo_reqwidth()))
             canvas.configure(scrollregion=canvas.bbox("all"))
         canvas.after_idle(_force_reflow)
 
@@ -815,49 +610,33 @@ class WaybackGUI:
         ttk.Separator(parent, orient="horizontal").grid(
             row=row, column=0, columnspan=4, sticky="ew", padx=8, pady=4)
 
+    @staticmethod
+    def _in_canvas_viewport(widget):
+        """Return True only if widget is within its scrollable canvas's visible area."""
+        w = widget.master
+        while w is not None:
+            if isinstance(w, tk.Canvas):
+                wy = widget.winfo_rooty()
+                cy = w.winfo_rooty()
+                return cy <= wy and (wy + widget.winfo_height()) <= (cy + w.winfo_height())
+            w = getattr(w, "master", None)
+        return True  # no canvas ancestor — always visible
+
     def _qbtn(self, parent, row, tip_key):
         """Place a ? button in column 3; attach tooltip from _TIPS. Returns button."""
         tip = _TIPS.get(tip_key, "")
         if not tip:
             return None
-        btn = ttk.Button(parent, text="?", width=2, takefocus=False)
+        btn = ttk.Button(parent, text="?", width=2)
         btn.grid(row=row, column=3, sticky="nw", padx=(2, 8), pady=2)
         tt = _Tooltip(btn, tip)
 
-        def _in_canvas_viewport(widget):
-            """Return True only if widget is within its scrollable canvas's visible area."""
-            w = widget.master
-            while w is not None:
-                if isinstance(w, tk.Canvas):
-                    wy = widget.winfo_rooty()
-                    cy = w.winfo_rooty()
-                    return cy <= wy and (wy + widget.winfo_height()) <= (cy + w.winfo_height())
-                w = getattr(w, "master", None)
-            return True  # no canvas ancestor — always visible
-
         # Show/hide tooltip on keyboard focus, but only when the button is
         # actually visible (not scrolled out of view in the tab's canvas).
-        # Use a short delay so that focus delivered automatically by a tab
-        # switch (before the canvas has laid out) doesn't immediately pop the
-        # tooltip at position (0,0).  The pending job is cancelled if focus
-        # leaves before the delay fires.
-        _focus_job = [None]
-
-        def _focus_show(e):
-            if not _in_canvas_viewport(btn):
-                return
-            if _focus_job[0] is not None:
-                btn.after_cancel(_focus_job[0])
-            _focus_job[0] = btn.after(200, lambda: tt._show(e) if btn.focus_displayof() == btn else None)
-
-        def _focus_hide(e):
-            if _focus_job[0] is not None:
-                btn.after_cancel(_focus_job[0])
-                _focus_job[0] = None
-            tt._hide(e)
-
-        btn.bind("<FocusIn>",  _focus_show, add="+")
-        btn.bind("<FocusOut>", _focus_hide, add="+")
+        btn.bind("<FocusIn>",
+                 lambda e: tt._show(e) if self._in_canvas_viewport(btn) else None,
+                 add="+")
+        btn.bind("<FocusOut>", tt._hide, add="+")
         return btn
 
     def _field(self, parent, row, label, widget_fn, hint="", tip_key=""):
@@ -1146,9 +925,8 @@ class WaybackGUI:
         self._set_state("min_gap",                freq_all,    "frequency = all")
         self._set_state("fallback_candidates",    freq_all,    "frequency = all")
         self._set_state("threads",                headless,    "headless_browser = yes")
-        self._set_state("label_elements",         no_reformat, "reformat = no")
-        self._set_state("value_elements",         no_reformat, "reformat = no")
         self._set_state("sort",                   no_reformat, "reformat = no")
+        self._set_pairs_state(no_reformat)
         self._set_state("zero_fill",              no_reformat, "reformat = no")
         self._set_state("fill_first",             no_reformat, "reformat = no")
         self._set_state("label_merge",            no_reformat, "reformat = no")
@@ -1266,9 +1044,13 @@ class WaybackGUI:
 
     def _add_level(self, i, value="", *, _loading=False):
         """Append one new level row to element slot *i*."""
-        levels      = self._element_levels[i]
-        rows_frame  = self._element_containers[i]
-        level_idx   = len(levels)
+        levels     = self._element_levels[i]
+        level_idx  = len(levels)
+        # Level 0 (root) lives in its own frame so the ? element button can be
+        # inserted between it and the child rows in tab order.
+        rows_frame = (self._element_level0_containers[i]
+                      if level_idx == 0 else
+                      self._element_containers[i])
 
         row_frame = ttk.Frame(rows_frame)
         row_frame.pack(fill="x", pady=(0, 2))
@@ -1288,7 +1070,7 @@ class WaybackGUI:
             indent_lbl.grid(row=0, column=0, sticky="e", padx=(0, 2))
 
         _border = ttk.Style().lookup("TEntry", "bordercolor") or "#999999"
-        entry = tk.Text(row_frame, height=2, wrap=tk.WORD,
+        entry = tk.Text(row_frame, height=2, width=1, wrap=tk.WORD,
                         font=("TkDefaultFont", 9),
                         relief="flat", borderwidth=0,
                         highlightthickness=1,
@@ -1331,7 +1113,12 @@ class WaybackGUI:
         # Remove button (hidden while there is only one level)
         remove_btn = ttk.Button(row_frame, text="✕", width=2)
         remove_btn.grid(row=0, column=2, sticky="e", padx=(0, 0))
-        _Tooltip(remove_btn, "Remove Child Element")
+        _rm_tt = _Tooltip(remove_btn, _TIPS.get("remove_child", ""))
+        remove_btn.bind("<FocusIn>",
+                        lambda e, b=remove_btn, tt=_rm_tt:
+                            tt._show(e) if self._in_canvas_viewport(b) else None,
+                        add="+")
+        remove_btn.bind("<FocusOut>", _rm_tt._hide, add="+")
 
         def _do_remove(_i=i, _idx=level_idx):
             self._remove_level(_i, _idx)
@@ -1389,6 +1176,9 @@ class WaybackGUI:
         for idx, lv in enumerate(levels):
             if idx == 0:
                 lv["remove_btn"].grid_remove()
+                # Level-0 remove button is never shown; exclude it from Tab
+                # traversal so focus moves straight from the entry to ? element.
+                lv["remove_btn"].configure(takefocus=False)
             else:
                 lv["remove_btn"].grid()
         spacer = self._element_add_spacers.get(i)
@@ -1467,12 +1257,23 @@ class WaybackGUI:
         outer.grid(row=card_r, column=1, sticky="ew", padx=(0, 4), pady=3)
         outer.columnconfigure(0, weight=1)
 
-        rows_frame = ttk.Frame(outer)
-        rows_frame.pack(fill="x")
-        rows_frame.columnconfigure(1, weight=1)
+        # Level 0 ("root") row lives in its own frame so the ? element tooltip
+        # button can be placed right after it in tab order — before any child
+        # rows and before the + Add Child button.
+        level_0_frame = ttk.Frame(outer)
+        level_0_frame.pack(fill="x")
+        level_0_frame.columnconfigure(1, weight=1)
 
-        self._element_levels[slot_id]     = []
-        self._element_containers[slot_id] = rows_frame
+        # Child rows (levels 1+) live in a separate frame that follows
+        # level_0_frame in outer's widget list, so they come after ? element in
+        # the tab order.
+        children_frame = ttk.Frame(outer)
+        children_frame.pack(fill="x")
+        children_frame.columnconfigure(1, weight=1)
+
+        self._element_levels[slot_id]              = []
+        self._element_level0_containers[slot_id]   = level_0_frame
+        self._element_containers[slot_id]          = children_frame
 
         # Create the Add Child bar and register the spacer BEFORE calling
         # _add_level, so _refresh_level_buttons can correctly set the spacer
@@ -1491,50 +1292,35 @@ class WaybackGUI:
         for part in (parts or [""]):
             self._add_level(slot_id, value=part, _loading=_loading or self._loading)
 
-        # Pack btn_frame below the level rows.
-        btn_frame.pack(fill="x", pady=(2, 0))
-
-        _add_tip = (
-            "Add a child element.\n\n"
-            "Each level narrows the search deeper into the page:\n\n"
-            "Paste an HTML tag from Inspect Element.\n\n"
-            "To target a specific occurrence, place a number directly before the child element:\n"
-            "  <div class=\"row\"> 2<span class=\"value\">text</span>\n"
-            "   -> the 2nd span.value inside div.row\n\n"
-            "Bare numbers after a parent select by child position:\n"
-            "  <div class=\"row\"> 2 3\n"
-            "   -> the 3rd child of the 2nd child of div.row\n\n"
-            "All of these can be combined and stacked freely.")
-        _add_qbtn = ttk.Button(btn_frame, text="?", width=2)
-        _add_qbtn.pack(side="left", padx=(6, 0))
-        _add_tt = _Tooltip(_add_qbtn, _add_tip)
-
-        def _in_canvas_viewport(widget):
-            w = widget.master
-            while w is not None:
-                if isinstance(w, tk.Canvas):
-                    wy = widget.winfo_rooty()
-                    cy = w.winfo_rooty()
-                    return cy <= wy and (wy + widget.winfo_height()) <= (cy + w.winfo_height())
-                w = getattr(w, "master", None)
-            return True
-
-        _add_qbtn.bind("<FocusIn>",
-                       lambda e, b=_add_qbtn, tt=_add_tt:
-                           tt._show(e) if _in_canvas_viewport(b) else None,
-                       add="+")
-        _add_qbtn.bind("<FocusOut>", _add_tt._hide, add="+")
-
-        # ? button for the element field (column 3)
-        q_btn = ttk.Button(card, text="?", width=2, takefocus=False)
-        q_btn.grid(row=card_r, column=3, sticky="nw", padx=(2, 8), pady=2)
+        # ? button for the element field: created after _add_level so we can
+        # attach it directly to the level-0 row frame at column 3.  This places
+        # it in tab order immediately after the level-0 entry and before any
+        # child rows (which live in children_frame, later in outer's widget list)
+        # and before + Add Child (in btn_frame, also later).
+        level_0_row_frame = self._element_levels[slot_id][0]["row"]
+        q_btn = ttk.Button(level_0_row_frame, text="?", width=2)
+        q_btn.grid(row=0, column=3, sticky="e", padx=(2, 0))
         q_tt = _Tooltip(q_btn, _TIPS.get("element", ""))
 
         q_btn.bind("<FocusIn>",
                    lambda e, b=q_btn, tt=q_tt:
-                       tt._show(e) if _in_canvas_viewport(b) else None,
+                       tt._show(e) if self._in_canvas_viewport(b) else None,
                    add="+")
         q_btn.bind("<FocusOut>", q_tt._hide, add="+")
+
+        # Pack btn_frame below the level rows.
+        btn_frame.pack(fill="x", pady=(2, 0))
+
+        _add_qbtn = ttk.Button(btn_frame, text="?", width=2)
+        _add_qbtn.pack(side="left", padx=(6, 0))
+        _add_tt = _Tooltip(_add_qbtn, _TIPS.get("add_child", ""))
+
+        _add_qbtn.bind("<FocusIn>",
+                       lambda e, b=_add_qbtn, tt=_add_tt:
+                           tt._show(e) if self._in_canvas_viewport(b) else None,
+                       add="+")
+        _add_qbtn.bind("<FocusOut>", _add_tt._hide, add="+")
+
         card_r += 1
 
         # ---- Extract row -----------------------------------------------------
@@ -1563,9 +1349,14 @@ class WaybackGUI:
         self._var(f"extract_{slot_id}").set(extract if extract else "text")
         self._loading = _prev_loading
 
-        _ext_qbtn = ttk.Button(_ecb_frame, text="?", width=2, takefocus=False)
+        _ext_qbtn = ttk.Button(_ecb_frame, text="?", width=2)
         _ext_qbtn.pack(side="left", padx=(6, 0))
-        _Tooltip(_ext_qbtn, _TIPS.get("extract", ""))
+        _ext_tt = _Tooltip(_ext_qbtn, _TIPS.get("extract", ""))
+        _ext_qbtn.bind("<FocusIn>",
+                       lambda e, b=_ext_qbtn, tt=_ext_tt:
+                           tt._show(e) if self._in_canvas_viewport(b) else None,
+                       add="+")
+        _ext_qbtn.bind("<FocusOut>", _ext_tt._hide, add="+")
         card_r += 1
 
         # ---- Store card metadata --------------------------------------------
@@ -1598,7 +1389,8 @@ class WaybackGUI:
         self._active_slots.remove(slot_id)
 
         for d in (self._element_levels, self._element_containers,
-                  self._element_add_btns, self._element_add_spacers):
+                  self._element_level0_containers, self._element_add_btns,
+                  self._element_add_spacers):
             d.pop(slot_id, None)
 
         # Clear the vars for this slot so they don't pollute the written file.
@@ -1641,18 +1433,105 @@ class WaybackGUI:
                 info["remove_btn"].configure(
                     state="disabled" if only_one else "normal")
 
+    def _build_date_row(self, parent, row, label_text, prefix, tip_key):
+        """Build a date row with separate Year / Month / Day entry boxes.
+
+        The three sub-vars (<prefix>_date_y/m/d) are UI-only: they are combined
+        into the canonical <prefix>_date var (YYYYMMDD) via _sync_date_composite,
+        which is what gets written to settings.txt.
+        """
+        lbl = ttk.Label(parent, text=label_text)
+        lbl.grid(row=row, column=0, sticky="w", padx=(10, 4), pady=3)
+
+        frame = ttk.Frame(parent)
+        frame.grid(row=row, column=1, columnspan=2, sticky="w", padx=(0, 4), pady=3)
+
+        y_var = self._var(f"{prefix}_date_y")
+        m_var = self._var(f"{prefix}_date_m")
+        d_var = self._var(f"{prefix}_date_d")
+
+        ttk.Label(frame, text="Y").pack(side="left")
+        y_entry = ttk.Entry(frame, textvariable=y_var, width=5)
+        y_entry.pack(side="left", padx=(2, 8))
+        self._bind_arrow_nav(y_entry)
+        self._bind_smooth_drag_scroll(y_entry)
+
+        ttk.Label(frame, text="M").pack(side="left")
+        m_entry = ttk.Entry(frame, textvariable=m_var, width=3)
+        m_entry.pack(side="left", padx=(2, 8))
+        self._bind_arrow_nav(m_entry)
+        self._bind_smooth_drag_scroll(m_entry)
+
+        ttk.Label(frame, text="D").pack(side="left")
+        d_entry = ttk.Entry(frame, textvariable=d_var, width=3)
+        d_entry.pack(side="left", padx=(2, 0))
+        self._bind_arrow_nav(d_entry)
+        self._bind_smooth_drag_scroll(d_entry)
+
+        if tip_key:
+            tip = _TIPS.get(tip_key, "")
+            if tip:
+                qbtn = ttk.Button(frame, text="?", width=2)
+                qbtn.pack(side="left", padx=(6, 0))
+                qtt = _Tooltip(qbtn, tip)
+                qbtn.bind("<FocusIn>",
+                          lambda e, b=qbtn, tt=qtt:
+                              tt._show(e) if self._in_canvas_viewport(b) else None,
+                          add="+")
+                qbtn.bind("<FocusOut>", qtt._hide, add="+")
+
+        def _on_change(*_):
+            if not self._loading:
+                self._sync_date_composite(prefix)
+
+        y_var.trace_add("write", _on_change)
+        m_var.trace_add("write", _on_change)
+        d_var.trace_add("write", _on_change)
+
+    def _sync_date_composite(self, prefix):
+        """Combine <prefix>_date_y/m/d into a YYYYMMDD string in <prefix>_date.
+
+        Validation rules (any failure → combined = "", i.e. no date filter):
+          - All three fields must be non-empty and contain only digits.
+          - Year : 1–4 digits (zero-padded to 4 on output).
+          - Month: 1–12.
+          - Day  : 1–31.
+        Out-of-range or non-numeric input (negatives, floats, letters) is
+        silently treated as "no filter" so the tracker never sees a bad value.
+        """
+        y = self._var(f"{prefix}_date_y").get().strip()
+        m = self._var(f"{prefix}_date_m").get().strip()
+        d = self._var(f"{prefix}_date_d").get().strip()
+
+        combined = ""
+        if y and m and d:
+            if y.isdigit() and m.isdigit() and d.isdigit() and 1 <= len(y) <= 4:
+                yi, mi, di = int(y), int(m), int(d)
+                if 1 <= mi <= 12 and 1 <= di <= 31:
+                    combined = f"{yi:04d}{mi:02d}{di:02d}"
+
+        if self._var(f"{prefix}_date").get() != combined:
+            self._var(f"{prefix}_date").set(combined)
+
+    def _split_date_composite(self, prefix):
+        """Split <prefix>_date (YYYYMMDD) back into the three sub-vars."""
+        val = self._var(f"{prefix}_date").get().strip()
+        if val and len(val) == 8 and val.isdigit():
+            y, m, d = val[:4], val[4:6], val[6:8]
+        else:
+            y, m, d = "", "", ""
+        self._var(f"{prefix}_date_y").set(y)
+        self._var(f"{prefix}_date_m").set(m)
+        self._var(f"{prefix}_date_d").set(d)
+
     def _build_schedule_tab(self):
         f = self._scrollable_tab("Schedule")
         f.columnconfigure(1, weight=1)
         r = 0
 
         self._section(f, r, "Date Range"); r += 1
-        self._field(f, r, "From Date",
-                    lambda p: self._entry(p, "from_date", 12),
-                    tip_key="from_date"); r += 1
-        self._field(f, r, "To Date",
-                    lambda p: self._entry(p, "to_date", 12),
-                    tip_key="to_date"); r += 1
+        self._build_date_row(f, r, "From Date", "from", "from_date"); r += 1
+        self._build_date_row(f, r, "To Date",   "to",   "to_date");   r += 1
 
         self._sep(f, r); r += 1
         self._section(f, r, "Snapshot Frequency"); r += 1
@@ -1731,6 +1610,397 @@ class WaybackGUI:
                     lambda p: self._combo(p, "split_output", ["no", "files", "merged"]),
                     tip_key="split_output"); r += 1
 
+    # -- Reformat pairs widget --------------------------------------------------
+
+    def _build_pairs_rows(self, parent, row_l, row_v, row_btn):
+        """Build the Label Elements, Value Elements, and pair-control button rows.
+
+        ? buttons are packed inside the entry containers as the last item so
+        they always sit just to the right of the final entry box and move as
+        pairs are added or removed.  +/- buttons live in a dedicated fixed row
+        (row_btn) and are pixel-sized to match the entry boxes after layout.
+        """
+        # --- Label Elements row ---
+        lbl_label = ttk.Label(parent, text="Label Elements")
+        lbl_label.grid(row=row_l, column=0, sticky="w", padx=(10, 4), pady=3)
+
+        self._pairs_l_container = ttk.Frame(parent)
+        self._pairs_l_container.grid(row=row_l, column=1, columnspan=3,
+                                      sticky="w", padx=(0, 4), pady=3)
+
+        # When entries are added/removed the container grows/shrinks.  inner's
+        # own <Configure> won't fire (canvas window width is fixed), so we bind
+        # directly to the container and nudge the scroll system ourselves.
+        def _on_pairs_resize(e):
+            if hasattr(parent, "_trigger_scroll_check"):
+                parent._trigger_scroll_check()
+        self._pairs_l_container.bind("<Configure>", _on_pairs_resize, add="+")
+
+        # ? button lives inside the container so it trails the last entry.
+        l_qbtn = ttk.Button(self._pairs_l_container, text="?", width=2)
+        l_qbtn.pack(side="left", padx=(4, 0))
+        l_qtt = _Tooltip(l_qbtn, _TIPS.get("label_elements", ""))
+        l_qbtn.bind("<FocusIn>",
+                    lambda e, b=l_qbtn, tt=l_qtt:
+                        tt._show(e) if self._in_canvas_viewport(b) else None,
+                    add="+")
+        l_qbtn.bind("<FocusOut>", l_qtt._hide, add="+")
+
+        # --- Value Elements row ---
+        val_label = ttk.Label(parent, text="Value Elements")
+        val_label.grid(row=row_v, column=0, sticky="w", padx=(10, 4), pady=3)
+
+        self._pairs_v_container = ttk.Frame(parent)
+        self._pairs_v_container.grid(row=row_v, column=1, columnspan=3,
+                                      sticky="w", padx=(0, 4), pady=3)
+
+        v_qbtn = ttk.Button(self._pairs_v_container, text="?", width=2)
+        v_qbtn.pack(side="left", padx=(4, 0))
+        v_qtt = _Tooltip(v_qbtn, _TIPS.get("value_elements", ""))
+        v_qbtn.bind("<FocusIn>",
+                    lambda e, b=v_qbtn, tt=v_qtt:
+                        tt._show(e) if self._in_canvas_viewport(b) else None,
+                    add="+")
+        v_qbtn.bind("<FocusOut>", v_qtt._hide, add="+")
+
+        # --- Fixed button row (+ −) ---
+        # Wrapper tk.Frames let us set an explicit pixel width so they match
+        # the entry boxes exactly.  pack_propagate(False) stops the frame from
+        # shrinking to fit the button child.
+        btn_outer = ttk.Frame(parent)
+        btn_outer.grid(row=row_btn, column=1, columnspan=3, sticky="w",
+                        padx=(0, 4), pady=(0, 4))
+
+        add_wrap = tk.Frame(btn_outer)          # plain tk.Frame for pixel sizing
+        add_wrap.pack_propagate(False)
+        add_wrap.pack(side="left", padx=(0, 2))
+        self._pairs_add_btn = ttk.Button(add_wrap, text="+",
+                                          command=self._add_pair_slot)
+        self._pairs_add_btn.pack(fill="both", expand=True)
+        _pairs_add_tt = _Tooltip(self._pairs_add_btn, _TIPS.get("pairs_add", ""))
+        self._pairs_add_btn.bind("<FocusIn>",
+                                 lambda e, b=self._pairs_add_btn, tt=_pairs_add_tt:
+                                     tt._show(e) if self._in_canvas_viewport(b) else None,
+                                 add="+")
+        self._pairs_add_btn.bind("<FocusOut>", _pairs_add_tt._hide, add="+")
+
+        rem_wrap = tk.Frame(btn_outer)
+        rem_wrap.pack_propagate(False)
+        rem_wrap.pack(side="left", padx=(0, 0))
+        self._pairs_rem_btn = ttk.Button(rem_wrap, text="\u2212",
+                                          command=self._remove_last_pair)
+        self._pairs_rem_btn.pack(fill="both", expand=True)
+        _pairs_rem_tt = _Tooltip(self._pairs_rem_btn, _TIPS.get("pairs_remove", ""))
+        self._pairs_rem_btn.bind("<FocusIn>",
+                                 lambda e, b=self._pairs_rem_btn, tt=_pairs_rem_tt:
+                                     tt._show(e) if self._in_canvas_viewport(b) else None,
+                                 add="+")
+        self._pairs_rem_btn.bind("<FocusOut>", _pairs_rem_tt._hide, add="+")
+
+        # Store the wrapper frames so _sync_pair_btn_size can resize them.
+        self._pairs_add_wrap = add_wrap
+        self._pairs_rem_wrap = rem_wrap
+
+        # Store refs for enable/disable and ? label updates
+        self._pairs_lbl_widgets = [lbl_label, val_label]
+        self._pairs_qbtns       = [l_qbtn, v_qbtn]
+
+    def _add_pair_slot(self, lval="", vval=""):
+        """Append a new entry to both the L and V rows."""
+        lvar = tk.StringVar(value=str(lval))
+        vvar = tk.StringVar(value=str(vval))
+
+        # Temporarily unpack the ? buttons so the new entry frames pack before them.
+        l_qbtn, v_qbtn = (self._pairs_qbtns or [None, None])
+        if l_qbtn:
+            l_qbtn.pack_forget()
+        if v_qbtn:
+            v_qbtn.pack_forget()
+
+        lframe = ttk.Frame(self._pairs_l_container)
+        lframe.pack(side="left", padx=(0, 2))
+        le = ttk.Entry(lframe, textvariable=lvar, width=3)
+        le.pack()
+        le.bind("<FocusIn>",
+                lambda e: le.after(0, le.selection_clear), add="+")
+
+        vframe = ttk.Frame(self._pairs_v_container)
+        vframe.pack(side="left", padx=(0, 2))
+        ve = ttk.Entry(vframe, textvariable=vvar, width=3)
+        ve.pack()
+        ve.bind("<FocusIn>",
+                lambda e: ve.after(0, ve.selection_clear), add="+")
+
+        # Repack the ? buttons so they trail the last entry.
+        # lift() moves each button to the top of its container's stacking order,
+        # which is what tk_focusNext uses — so the entries are always traversed
+        # before the ? button regardless of how many pairs exist.
+        if l_qbtn:
+            l_qbtn.pack(side="left", padx=(4, 0))
+            l_qbtn.lift()
+        if v_qbtn:
+            v_qbtn.pack(side="left", padx=(4, 0))
+            v_qbtn.lift()
+
+        slot = {"lvar": lvar, "vvar": vvar, "lframe": lframe, "vframe": vframe,
+                "le": le, "ve": ve}
+        self._pair_entries.append(slot)
+        self._bind_pair_entry_nav(slot)
+
+        lvar.trace_add("write", lambda *_: self._sync_pairs_to_vars())
+        vvar.trace_add("write", lambda *_: self._sync_pairs_to_vars())
+
+        self._update_rem_btn()
+        self._update_add_btn()
+        # Pixel-sync the +/- buttons to entry size on every add (first call
+        # may fire before layout settles, subsequent calls are instant no-ops).
+        le.after_idle(self._sync_pair_btn_size)
+
+        # Auto-scroll to reveal the new entry if it landed off-screen.
+        if not self._loading:
+            container = self._pairs_l_container
+            def _scroll_to_new():
+                parent = container.master
+                if hasattr(parent, "_scroll_to_show_right"):
+                    parent._scroll_to_show_right()
+            le.after_idle(_scroll_to_new)
+            self._sync_pairs_to_vars()
+
+        return slot
+
+    def _bind_pair_entry_nav(self, slot):
+        """Arrow-key navigation for a pair (le / ve) entry slot.
+
+        Left / Right: move the cursor normally within the entry; when the
+        cursor is already at the edge (or the entry is empty), jump focus to
+        the neighbouring pair entry in the same row.
+
+        Up on le  : move cursor to the start (mirrors _bind_arrow_nav Up).
+        Down on le : jump focus to the ve of the same pair.
+        Up on ve   : jump focus to the le of the same pair.
+        Down on ve : move cursor to the end (mirrors _bind_arrow_nav Down).
+        """
+        le = slot["le"]
+        ve = slot["ve"]
+
+        def _idx():
+            try:
+                return self._pair_entries.index(slot)
+            except ValueError:
+                return -1
+
+        # ---- helpers -------------------------------------------------------
+        def _move_cursor_left(w):
+            pos = w.index("insert")
+            if pos == 0:
+                return False      # already at left edge
+            w.icursor(pos - 1)
+            if w.index("@0") > pos - 1:
+                w.xview_scroll(-1, "units")
+            return True
+
+        def _move_cursor_right(w):
+            pos = w.index("insert")
+            end = w.index("end")
+            if pos >= end:
+                return False      # already at right edge
+            w.icursor(pos + 1)
+            width = w.winfo_width()
+            if width > 1 and w.index(f"@{width - 1}") < pos + 1:
+                w.xview_scroll(1, "units")
+            return True
+
+        # ---- le -------------------------------------------------------
+        def _le_left(e):
+            if not _move_cursor_left(le):
+                i = _idx()
+                if i > 0:
+                    t = self._pair_entries[i - 1]["le"]
+                    t.focus_set(); t.icursor("end")
+            return "break"
+
+        def _le_right(e):
+            if not _move_cursor_right(le):
+                i = _idx()
+                if 0 <= i < len(self._pair_entries) - 1:
+                    t = self._pair_entries[i + 1]["le"]
+                    t.focus_set(); t.icursor(0); t.xview_moveto(0)
+            return "break"
+
+        def _le_up(e):
+            le.icursor(0); le.xview_moveto(0)
+            return "break"
+
+        def _le_down(e):
+            ve.focus_set()
+            return "break"
+
+        # ---- ve -------------------------------------------------------
+        def _ve_left(e):
+            if not _move_cursor_left(ve):
+                i = _idx()
+                if i > 0:
+                    t = self._pair_entries[i - 1]["ve"]
+                    t.focus_set(); t.icursor("end")
+            return "break"
+
+        def _ve_right(e):
+            if not _move_cursor_right(ve):
+                i = _idx()
+                if 0 <= i < len(self._pair_entries) - 1:
+                    t = self._pair_entries[i + 1]["ve"]
+                    t.focus_set(); t.icursor(0); t.xview_moveto(0)
+            return "break"
+
+        def _ve_up(e):
+            le.focus_set()
+            return "break"
+
+        def _ve_down(e):
+            ve.icursor("end"); ve.xview_moveto(1)
+            return "break"
+
+        le.bind("<Left>",  _le_left)
+        le.bind("<Right>", _le_right)
+        le.bind("<Up>",    _le_up)
+        le.bind("<Down>",  _le_down)
+        ve.bind("<Left>",  _ve_left)
+        ve.bind("<Right>", _ve_right)
+        ve.bind("<Up>",    _ve_up)
+        ve.bind("<Down>",  _ve_down)
+
+    def _sync_pair_btn_size(self):
+        """Resize the +/- wrapper frames to match the pixel width of an entry box.
+
+        Uses the entry's pixel width for the wrapper width, but the button's own
+        natural height — so the text stays vertically centred exactly as it was
+        before the pixel-width wrapper was introduced.
+        """
+        if not self._pair_entries:
+            return
+        if self._pairs_add_wrap is None or self._pairs_rem_wrap is None:
+            return
+        le = self._pair_entries[0]["le"]
+        lf = self._pair_entries[0]["lframe"]
+        w = lf.winfo_reqwidth()    # entry width including any frame padding
+        if w < 2:
+            # Layout hasn't settled yet; retry after idle
+            le.after_idle(self._sync_pair_btn_size)
+            return
+        # Use the button's own requested height so we never stretch it and
+        # push the label text down.
+        h_add = self._pairs_add_btn.winfo_reqheight()
+        h_rem = self._pairs_rem_btn.winfo_reqheight()
+        if h_add < 2 or h_rem < 2:
+            le.after_idle(self._sync_pair_btn_size)
+            return
+        self._pairs_add_wrap.configure(width=w, height=h_add)
+        self._pairs_rem_wrap.configure(width=w, height=h_rem)
+
+    def _remove_last_pair(self):
+        """Remove the rightmost pair entry from both rows."""
+        if len(self._pair_entries) <= 1:
+            return
+        # Unpack ? buttons before destroying the last entry frame so pack order
+        # stays clean, then repack them after the new last entry.
+        l_qbtn, v_qbtn = (self._pairs_qbtns or [None, None])
+        if l_qbtn:
+            l_qbtn.pack_forget()
+        if v_qbtn:
+            v_qbtn.pack_forget()
+
+        slot = self._pair_entries.pop()
+        slot["lframe"].destroy()
+        slot["vframe"].destroy()
+
+        if l_qbtn:
+            l_qbtn.pack(side="left", padx=(4, 0))
+            l_qbtn.lift()
+        if v_qbtn:
+            v_qbtn.pack(side="left", padx=(4, 0))
+            v_qbtn.lift()
+
+        self._update_rem_btn()
+        self._update_add_btn()
+        self._sync_pairs_to_vars()
+
+    def _update_rem_btn(self):
+        """Enable the − button only when there are at least 2 pairs."""
+        n = len(self._pair_entries)
+        if self._pairs_rem_btn:
+            self._pairs_rem_btn.configure(
+                state="normal" if n > 1 else "disabled"
+            )
+
+    def _update_add_btn(self):
+        """Enable the + button only when the last pair has both label and value filled."""
+        if not self._pairs_add_btn:
+            return
+        # If globally disabled (reformat = no), leave it alone.
+        if getattr(self, "_pairs_force_disabled", False):
+            return
+        if not self._pair_entries:
+            self._pairs_add_btn.configure(state="normal")
+            return
+        last = self._pair_entries[-1]
+        both_filled = bool(last["lvar"].get().strip()) and bool(last["vvar"].get().strip())
+        self._pairs_add_btn.configure(state="normal" if both_filled else "disabled")
+
+    def _sync_pairs_to_vars(self):
+        """Write current pair entries back to label_elements / value_elements vars."""
+        if self._loading:
+            return
+        lbls = [s["lvar"].get() for s in self._pair_entries]
+        vals = [s["vvar"].get() for s in self._pair_entries]
+        self._loading = True
+        self._var("label_elements").set(" ".join(lbls))
+        self._var("value_elements").set(" ".join(vals))
+        self._loading = False
+        self._mark_dirty()
+        self._update_add_btn()
+
+    def _rebuild_pairs_from_vars(self):
+        """Clear and recreate pair entries from label_elements / value_elements vars."""
+        if self._pairs_l_container is None:
+            return
+        for slot in self._pair_entries:
+            slot["lframe"].destroy()
+            slot["vframe"].destroy()
+        self._pair_entries.clear()
+
+        lraw = self._var("label_elements").get().strip()
+        vraw = self._var("value_elements").get().strip()
+        lparts = lraw.split() if lraw else []
+        vparts = vraw.split() if vraw else []
+        n = max(len(lparts), len(vparts), 1)
+        for i in range(n):
+            lv = lparts[i] if i < len(lparts) else ""
+            vv = vparts[i] if i < len(vparts) else ""
+            self._add_pair_slot(lv, vv)
+
+    def _set_pairs_state(self, disabled):
+        """Enable or disable all pair entries and the +/− buttons."""
+        state = "disabled" if disabled else "normal"
+        fg    = "gray"     if disabled else ""
+        for lbl in self._pairs_lbl_widgets:
+            lbl.configure(foreground=fg)
+        for btn in self._pairs_qbtns:
+            btn.configure(state=state)
+        if self._pairs_add_btn:
+            self._pairs_force_disabled = disabled
+            if disabled:
+                self._pairs_add_btn.configure(state="disabled")
+            else:
+                self._update_add_btn()
+        if self._pairs_rem_btn:
+            if disabled:
+                self._pairs_rem_btn.configure(state="disabled")
+            else:
+                self._update_rem_btn()
+        for slot in self._pair_entries:
+            slot["le"].configure(state=state)
+            slot["ve"].configure(state=state)
+
     def _build_reformat_tab(self):
         f = self._scrollable_tab("Reformat")
         f.columnconfigure(1, weight=1)
@@ -1740,12 +2010,7 @@ class WaybackGUI:
         self._field(f, r, "Reformat",
                     lambda p: self._combo(p, "reformat", YES_NO),
                     tip_key="reformat"); r += 1
-        self._field(f, r, "Label Elements",
-                    lambda p: self._entry(p, "label_elements", 20),
-                    tip_key="label_elements"); r += 1
-        self._field(f, r, "Value Elements",
-                    lambda p: self._entry(p, "value_elements", 20),
-                    tip_key="value_elements"); r += 1
+        self._build_pairs_rows(f, r, r + 1, r + 2); r += 3
 
         self._sep(f, r); r += 1
         self._section(f, r, "Labels"); r += 1
@@ -1755,7 +2020,7 @@ class WaybackGUI:
                     tip_key="sort"); r += 1
         self._field(f, r, "Label Case",
                     lambda p: self._combo(p, "label_case",
-                    ["first_seen", "lower", "upper", "sentence"]),
+                    ["default", "lower", "upper", "sentence"]),
                     tip_key="label_case"); r += 1
         self._field(f, r, "Zero Fill",
                     lambda p: self._combo(p, "zero_fill",
@@ -1851,7 +2116,12 @@ class WaybackGUI:
                 clr_btn = ttk.Button(container, text="✕", width=2,
                                      command=lambda _v=self._var(key): _v.set(""))
                 clr_btn.pack(side="right")
-                _Tooltip(clr_btn, "Clear this shortcut")
+                _clr_tt = _Tooltip(clr_btn, _TIPS.get("shortcut_clear", ""))
+                clr_btn.bind("<FocusIn>",
+                             lambda e, b=clr_btn, tt=_clr_tt:
+                                 tt._show(e) if self._in_canvas_viewport(b) else None,
+                             add="+")
+                clr_btn.bind("<FocusOut>", _clr_tt._hide, add="+")
                 cap_btn = ttk.Button(container, text="Capture", width=8)
                 cap_btn.configure(
                     command=lambda _v=self._var(key), _b=cap_btn:
@@ -1859,7 +2129,12 @@ class WaybackGUI:
                 cap_btn.pack(side="right", padx=(0, 0))
                 tip_btn = ttk.Button(container, text="?", width=2)
                 tip_btn.pack(side="right", padx=(2, 2))
-                _Tooltip(tip_btn, _TIPS[tip_key])
+                _tip_tt = _Tooltip(tip_btn, _TIPS[tip_key])
+                tip_btn.bind("<FocusIn>",
+                             lambda e, b=tip_btn, tt=_tip_tt:
+                                 tt._show(e) if self._in_canvas_viewport(b) else None,
+                             add="+")
+                tip_btn.bind("<FocusOut>", _tip_tt._hide, add="+")
                 e = ttk.Entry(container, textvariable=self._var(key), width=22)
                 self._bind_arrow_nav(e)
                 self._bind_entry_undo(e, key)
@@ -1877,7 +2152,12 @@ class WaybackGUI:
                 clr_btn = ttk.Button(parent, text="✕", width=2,
                                      command=lambda _v=self._var(key): _v.set(""))
                 clr_btn.grid(row=row, column=4, sticky="w", padx=(0, 8), pady=3)
-                _Tooltip(clr_btn, "Clear this shortcut")
+                _clr_tt2 = _Tooltip(clr_btn, _TIPS.get("shortcut_clear", ""))
+                clr_btn.bind("<FocusIn>",
+                             lambda e, b=clr_btn, tt=_clr_tt2:
+                                 tt._show(e) if self._in_canvas_viewport(b) else None,
+                             add="+")
+                clr_btn.bind("<FocusOut>", _clr_tt2._hide, add="+")
 
             return e
 
@@ -2254,6 +2534,9 @@ class WaybackGUI:
         for k, v in raw.items():
             self._var(k).set(v)
         self._sync_element_frames_from_vars()
+        self._rebuild_pairs_from_vars()
+        self._split_date_composite("from")
+        self._split_date_composite("to")
         self._loading = False
         self._unsaved = False
         self._update_states()
@@ -2274,18 +2557,16 @@ class WaybackGUI:
 
     def _reset_saved(self):
         if not tk.messagebox.askyesno(
-                "Reset to Last Saved",
-                "Discard all unsaved changes and reload from settings.txt?"):
+                _DIALOGS["reset_saved"]["title"],
+                _DIALOGS["reset_saved"]["message"]):
             return
         self._load_from_file()
         self._rebind_shortcuts()
 
     def _reset_defaults(self):
         if not tk.messagebox.askyesno(
-                "Reset to Defaults",
-                "This will clear all settings back to their default values.\n"
-                "Settings.txt will not be changed until you click Save Settings.\n\n"
-                "Continue?"):
+                _DIALOGS["reset_defaults"]["title"],
+                _DIALOGS["reset_defaults"]["message"]):
             return
         # Load only from DEFAULT_SETTINGS, ignoring settings.txt
         raw = {}
@@ -2304,6 +2585,9 @@ class WaybackGUI:
         for k, v in raw.items():
             self._var(k).set(v)
         self._sync_element_frames_from_vars()
+        self._rebuild_pairs_from_vars()
+        self._split_date_composite("from")
+        self._split_date_composite("to")
         self._loading = False
         self._unsaved = False
         self._update_states()
@@ -2355,14 +2639,15 @@ class WaybackGUI:
                     if k in known_keys or re.match(r'^(element|extract)_\d+$', k):
                         found_keys.add(k)
         except Exception as e:
-            messagebox.showerror("Load Settings", f"Could not read file:\n{e}")
+            messagebox.showerror(
+                _DIALOGS["load_error_read"]["title"],
+                _DIALOGS["load_error_read"]["message"].format(e=e))
             return
 
         if not found_keys:
             messagebox.showerror(
-                "Load Settings",
-                "This file does not appear to be a valid settings file.\n\n"
-                "No recognised settings keys were found.",
+                _DIALOGS["load_error_invalid"]["title"],
+                _DIALOGS["load_error_invalid"]["message"],
             )
             return
 
@@ -2374,6 +2659,9 @@ class WaybackGUI:
         for k, v in raw.items():
             self._var(k).set(v)
         self._sync_element_frames_from_vars()
+        self._rebuild_pairs_from_vars()
+        self._split_date_composite("from")
+        self._split_date_composite("to")
         self._loading = False
         # Mark dirty only if the loaded file's values differ from what's currently
         # saved in settings.txt. Loading the same file should not trigger the
@@ -2390,8 +2678,8 @@ class WaybackGUI:
         if self._unsaved:
             # askyesnocancel: Yes=Save & exit, No=Exit without saving, Cancel=go back
             result = tk.messagebox.askyesnocancel(
-                "Unsaved Changes",
-                "You have unsaved changes.\nSave before closing?")
+                _DIALOGS["unsaved_changes"]["title"],
+                _DIALOGS["unsaved_changes"]["message"])
             if result is None:   # Cancel - go back to the window
                 return
             if result:           # Yes - save then exit
@@ -2399,8 +2687,118 @@ class WaybackGUI:
         self.root.destroy()
 
     # -- Run / Stop ------------------------------------------------------------
+    def _validate(self):
+        """Run pre-flight validation. Returns a list of human-readable error strings.
+
+        An empty list means all checks passed and it is safe to save + run.
+        Values for fields that are currently disabled in the UI are read from
+        _disabled_real_values so we always validate the true setting, not the
+        placeholder text shown while the field is greyed out.
+        """
+        errors = []
+
+        def _real(key):
+            return self._disabled_real_values.get(key, self._var(key).get()).strip()
+
+        # 1. URL is required
+        if not _real("url"):
+            errors.append(_ERRORS["url_required"])
+
+        # 2. At least one element must be filled in
+        has_element = any(
+            self._element_get_value(slot_id).strip()
+            for slot_id in self._active_slots
+        )
+        if not has_element:
+            errors.append(_ERRORS["element_required"])
+
+        # 3. Numeric fields
+        freq_all = self._var("frequency").get() == "all"
+        headless = self._var("headless_browser").get() == "yes"
+
+        # min_gap and fallback_candidates are disabled (and irrelevant) when
+        # frequency = all, so only validate them in the other modes.
+        if not freq_all:
+            val = _real("min_gap")
+            try:
+                if float(val) < 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                errors.append(_ERRORS["val_min_gap"].format(val=val))
+
+            val = _real("fallback_candidates")
+            try:
+                if int(val) < 0:
+                    raise ValueError
+            except (ValueError, TypeError):
+                errors.append(_ERRORS["val_fallback_candidates"].format(val=val))
+
+        val = _real("end_passes")
+        try:
+            if int(val) < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            errors.append(_ERRORS["val_end_passes"].format(val=val))
+
+        val = _real("delay")
+        try:
+            float(val)
+        except (ValueError, TypeError):
+            errors.append(_ERRORS["val_delay"].format(val=val))
+
+        val = _real("retries")
+        try:
+            if int(val) < 0:
+                raise ValueError
+        except (ValueError, TypeError):
+            errors.append(_ERRORS["val_retries"].format(val=val))
+
+        # threads is disabled (locked to 1) when headless_browser = yes.
+        if not headless:
+            val = _real("threads")
+            try:
+                if int(val) < 1:
+                    raise ValueError
+            except (ValueError, TypeError):
+                errors.append(_ERRORS["val_threads"].format(val=val))
+
+        # 4. Reformat pair validation (only when reformat = yes)
+        if self._var("reformat").get() == "yes":
+            rl = self._var("label_elements").get().strip()
+            rv = self._var("value_elements").get().strip()
+            if not rl or not rv:
+                errors.append(_ERRORS["val_reformat_missing"])
+            else:
+                try:
+                    label_slots = [int(x) for x in rl.split()]
+                    value_slots = [int(x) for x in rv.split()]
+                    if len(label_slots) != len(value_slots):
+                        errors.append(
+                            _ERRORS["val_reformat_mismatch"].format(
+                                label_count=len(label_slots),
+                                value_count=len(value_slots),
+                            )
+                        )
+                    else:
+                        for ls, vs in zip(label_slots, value_slots):
+                            if ls == vs:
+                                errors.append(
+                                    _ERRORS["val_reformat_overlap"].format(slot=ls)
+                                )
+                                break
+                except ValueError:
+                    errors.append(_ERRORS["val_reformat_not_int"])
+
+        return errors
+
     def _start(self):
         if self._running:
+            return
+        errors = self._validate()
+        if errors:
+            messagebox.showerror(
+                _DIALOGS["cannot_start"]["title"],
+                _DIALOGS["cannot_start"]["message"].format(errors="\n\n".join(errors)))
             return
         self._save()
         self._log_widget.configure(state="normal")
@@ -2432,6 +2830,7 @@ class WaybackGUI:
             self._proc = subprocess.Popen(
                 [exe, "-u", core_path, "--worker"],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                stdin=subprocess.PIPE,
                 text=True, bufsize=1,
                 creationflags=flags,
                 env={**os.environ, "PYTHONUNBUFFERED": "1"},
@@ -2574,7 +2973,24 @@ class WaybackGUI:
         # -- Pass 1: drain every queued item, split into progress signals vs log lines.
         # Progress signals are processed immediately regardless of queue depth so the
         # bar always reflects the latest state even during heavy output bursts.
+        # Fatal messages emitted by sys.exit() in the worker.  sys.exit("msg")
+        # writes to stderr, which is merged into stdout via stderr=STDOUT, so
+        # these arrive as ordinary log lines – no special signal prefix.
+        # We match them here so we can show a dialog without touching the tracker.
+        _FATAL_PATTERNS = [
+            # CDX API unreachable after all retries
+            re.compile(r'\[CDX\]\s+Query failed after \d+ attempt'),
+            # URL matched zero Wayback snapshots
+            re.compile(r'^No snapshots to process\.$'),
+        ]
+
+        def _is_fatal_exit(line: str) -> bool:
+            s = line.strip()
+            return any(p.search(s) for p in _FATAL_PATTERNS)
+
         pending_log = []
+        confirm_request = None  # (title, body) if a [_CONFIRM_] signal was received
+        error_requests = []     # list of error message strings from [_ERROR_] signals
         try:
             while True:
                 chunk = self._log_q.get_nowait()
@@ -2594,7 +3010,20 @@ class WaybackGUI:
                             text=f"{self._prog_done} / {total}  ({pct}%)")
                     # swallow – never add to the log widget
                 else:
-                    pending_log.append(chunk)
+                    c = re.match(r'\[_CONFIRM_ (.+?)\|(.+)\]', chunk.strip())
+                    if c:
+                        confirm_request = (c.group(1).strip(), c.group(2).strip())
+                        # swallow – dialog replaces this line in the GUI
+                    elif chunk.strip().startswith('[_ERROR_ ') and chunk.strip().endswith(']'):
+                        raw = chunk.strip()[len('[_ERROR_ '):-1]
+                        error_msg = raw.replace('\\n', '\n').replace('\\\\', '\\')
+                        error_requests.append(error_msg)
+                        # swallow – already logged to the panel by _error_exit; dialog will show it
+                    elif _is_fatal_exit(chunk):
+                        error_requests.append(chunk.strip())
+                        pending_log.append(chunk)   # keep in log as well
+                    else:
+                        pending_log.append(chunk)
         except _queue.Empty:
             pass
 
@@ -2622,6 +3051,26 @@ class WaybackGUI:
 
         for chunk in reversed(overflow):
             self._log_q.queue.appendleft(chunk)
+
+        # -- Pass 3: show confirm dialog after log is flushed so the warning
+        # text is visible before the dialog appears. Write the user's choice
+        # to the worker's stdin so input() in the worker receives it.
+        if confirm_request:
+            title_txt, body_txt = confirm_request
+            result = tk.messagebox.askyesno(title_txt, body_txt)
+            try:
+                self._proc.stdin.write("y\n" if result else "n\n")
+                self._proc.stdin.flush()
+            except Exception:
+                pass
+
+        # -- Pass 4: show error dialogs. The message is already in the log
+        # (written by _error_exit before the signal); the dialog makes it
+        # impossible to miss. Multiple errors are shown sequentially.
+        for err_msg in error_requests:
+            tk.messagebox.showerror(
+                _DIALOGS["run_error"]["title"],
+                _DIALOGS["run_error"]["message"].format(msg=err_msg))
 
         self.root.after(100, self._poll_log)
 

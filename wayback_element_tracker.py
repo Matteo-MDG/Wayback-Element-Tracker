@@ -12,12 +12,13 @@ import html
 from urllib.parse import urlparse, parse_qs, unquote
 import requests
 from bs4 import BeautifulSoup
+from wayback_dialogs import _DIALOGS, _ERRORS
 
 # Playwright is optional - imported lazily when headless_browser = yes
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-VERSION = "v2.4.0"
+VERSION = "v2.5.0"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -253,6 +254,45 @@ def drain_buffer():
             _next_to_print[0] += 1
 
 
+def _confirm(title: str, short_msg: str) -> bool:
+    """
+    Prompt the user Y/N to continue.
+    In GUI mode, emits a [_CONFIRM_] signal so the GUI can show a dialog;
+    the user's button press is piped back via stdin, and no visible prompt
+    is printed (the dialog replaces it).
+    In CLI mode, prints the prompt directly and reads from stdin.
+    Returns True if the user confirms.
+    """
+    if _GUI_MODE:
+        print(f"[_CONFIRM_ {title}|{short_msg}]", flush=True)
+        try:
+            answer = input("").strip().lower()
+        except EOFError:
+            answer = "n"
+    else:
+        try:
+            answer = input("  Continue anyway? [Y/N]: ").strip().lower()
+        except EOFError:
+            answer = "n"
+    return answer in ("y", "yes")
+
+
+def _error_exit(msg: str):
+    """
+    Exit with an error message. In CLI mode behaves like sys.exit(msg),
+    printing to stderr. In GUI mode, logs the message to the output panel
+    and emits a [_ERROR_] signal so the GUI can show a messagebox, then
+    exits cleanly with code 1 to avoid a duplicate stderr print.
+    """
+    if _GUI_MODE:
+        log(msg)
+        encoded = msg.replace("\\", "\\\\").replace("\n", "\\n")
+        print(f"[_ERROR_ {encoded}]", flush=True)
+        sys.exit(1)
+    else:
+        sys.exit(msg)
+
+
 def save_log(output_path: str, log_dir: str = None):
     stem = os.path.splitext(os.path.basename(output_path))[0]
     if log_dir:
@@ -339,11 +379,7 @@ def parse_element_html(raw: str, slot: int) -> tuple:
     tag_matches = list(opening_tag_re.finditer(raw))
 
     if not tag_matches:
-        sys.exit(
-            f"[Error] Could not parse element_{slot} in settings.txt.\n"
-            f"        Paste the full HTML tag, e.g.:\n"
-            f"        element_{slot} = <p class=\"rbx-lead\" title=\"28,760,666\">28M+</p>"
-        )
+        _error_exit(_ERRORS["parse_element"].format(label=f"element_{slot}", slot=slot))
 
     def tag_to_selector(tag_html, step_num):
         """Convert an opening-tag string to a CSS selector string + extractable attrs."""
@@ -356,11 +392,7 @@ def parse_element_html(raw: str, slot: int) -> tuple:
         if element is None:
             label = (f"element_{slot}" if step_num == 0
                      else f"element_{slot} (step {step_num + 1})")
-            sys.exit(
-                f"[Error] Could not parse {label} in settings.txt.\n"
-                f"        Paste the full HTML tag, e.g.:\n"
-                f"        element_{slot} = <p class=\"rbx-lead\" title=\"28,760,666\">28M+</p>"
-            )
+            _error_exit(_ERRORS["parse_element"].format(label=label, slot=slot))
         classes = element.get("class", [])
         sel = element.name
         if classes:
@@ -610,7 +642,7 @@ fill_first = no
 merged_meta = interleaved
 label_merge = no
 label_strip_separators = no
-label_case = first_seen
+label_case = default
 
 # --- FETCH MODE ------------------------------------------------------------------------------------------
 headless_browser = no
@@ -690,7 +722,7 @@ def load_settings(path="settings.txt") -> dict:
                 raw[f"extract_{_n}"] = "text"
 
     if not raw["url"]:
-        sys.exit("[Error] 'url' is missing from settings.txt")
+        _error_exit(_ERRORS["url_missing"])
 
     # Strip trailing * from URL - treat it the same as filter_any = *
     url = raw["url"]
@@ -707,38 +739,38 @@ def load_settings(path="settings.txt") -> dict:
         raw["output"] = raw["output"] + ".csv"
 
     if raw["frequency"] not in FREQ_MAP:
-        sys.exit(f"[Error] 'frequency' must be one of: {', '.join(FREQ_MAP)}")
+        _error_exit(_ERRORS["frequency_invalid"].format(values=', '.join(FREQ_MAP)))
     if raw["sample_from"].lower() not in ("start", "middle", "end"):
-        sys.exit("[Error] 'sample_from' must be 'start', 'middle', or 'end'")
+        _error_exit(_ERRORS["sample_from_invalid"])
     if raw["csv_layout"].lower() not in ("columns", "rows"):
-        sys.exit("[Error] 'csv_layout' must be 'columns' or 'rows'")
+        _error_exit(_ERRORS["csv_layout_invalid"])
     if raw["year_digits"] not in ("2", "4"):
-        sys.exit("[Error] 'year_digits' must be '2' or '4'")
+        _error_exit(_ERRORS["year_digits_invalid"])
     for field in ("from_date", "to_date"):
         val = raw[field]
         if val and (not val.isdigit() or len(val) != 8):
-            sys.exit(f"[Error] '{field}' must be in YYYYMMDD format (e.g. 20231105), got: {val!r}")
+            _error_exit(_ERRORS["date_format_invalid"].format(field=field, val=val))
 
     try:
         min_gap_frac = float(raw["min_gap"])
         if min_gap_frac < 0:
             raise ValueError
     except ValueError:
-        sys.exit("[Error] 'min_gap' must be a number >= 0, e.g. 0.5")
+        _error_exit(_ERRORS["min_gap_invalid"])
 
     try:
         fallback_candidates = int(raw["fallback_candidates"])
         if fallback_candidates < 0:
             raise ValueError
     except ValueError:
-        sys.exit("[Error] 'fallback_candidates' must be an integer >= 0")
+        _error_exit(_ERRORS["fallback_candidates_invalid"])
 
     try:
         end_passes = int(raw["end_passes"])
         if end_passes < 0:
             raise ValueError
     except ValueError:
-        sys.exit("[Error] 'end_passes' must be an integer >= 0")
+        _error_exit(_ERRORS["end_passes_invalid"])
 
     min_gap_secs = int(FREQ_SECONDS.get(raw["frequency"], 0) * min_gap_frac)
 
@@ -753,32 +785,25 @@ def load_settings(path="settings.txt") -> dict:
 
     if do_reformat:
         if sort not in ("alphabet", "reverse", "unsorted"):
-            sys.exit("[Error] 'sort' must be 'alphabet', 'reverse', or 'unsorted'.")
+            _error_exit(_ERRORS["sort_invalid"])
         rl = raw["label_elements"].strip()
         rv = raw["value_elements"].strip()
         if not rl or not rv:
-            sys.exit(
-                "[Error] 'label_elements' and 'value_elements' must both be "
-                "set when reformat = yes.\n"
-                "        Use space-separated slot numbers for multiple pairs, e.g.:\n"
-                "        label_elements = 1 2\n"
-                "        value_elements = 3 4"
-            )
+            _error_exit(_ERRORS["reformat_missing"])
         try:
             label_slots = [int(x) for x in rl.split()]
             value_slots = [int(x) for x in rv.split()]
         except ValueError:
-            sys.exit("[Error] 'label_elements' and 'value_elements' must be "
-                     "integers matching element_N slot numbers.")
+            _error_exit(_ERRORS["reformat_not_int"])
         if len(label_slots) != len(value_slots):
-            sys.exit(
-                f"[Error] 'label_elements' has {len(label_slots)} slot(s) but "
-                f"'value_elements' has {len(value_slots)}. They must have the same count."
+            _error_exit(
+                _ERRORS["reformat_mismatch"].format(
+                    label_count=len(label_slots), value_count=len(value_slots)
+                )
             )
         for ls, vs in zip(label_slots, value_slots):
             if ls == vs:
-                sys.exit(f"[Error] label_elements and value_elements must be different "
-                         f"(slot {ls} appears in both).")
+                _error_exit(_ERRORS["reformat_overlap"].format(slot=ls))
         reformat_pairs = list(zip(label_slots, value_slots))
 
     elements = []
@@ -795,10 +820,7 @@ def load_settings(path="settings.txt") -> dict:
         extract = raw.get(f"extract_{i}", "text").lower()
         if extract != "text" and not extract.startswith("data-") \
                 and extract not in KNOWN_ATTRS:
-            sys.exit(
-                f"[Error] extract_{i} = '{extract}' is not recognised.\n"
-                f"        Use 'text', a known attribute, or a data-* attribute."
-            )
+            _error_exit(_ERRORS["extract_invalid"].format(slot=i, extract=extract))
         selector_chain, extractables = parse_element_html(html, i)
 
         def _step_display(step):
@@ -823,15 +845,14 @@ def load_settings(path="settings.txt") -> dict:
         elements.append({"slot": i, "selector_chain": selector_chain, "selector": selector, "extract": extract})
 
     if not elements:
-        sys.exit("[Error] At least one element_N must be set in settings.txt\n"
-                 "        (e.g. element_1 = <p class=\"...\">...</p>).")
+        _error_exit(_ERRORS["element_missing"])
 
     try:
         threads = int(raw["threads"])
         if threads < 1:
             raise ValueError
     except ValueError:
-        sys.exit("[Error] 'threads' must be a positive integer.")
+        _error_exit(_ERRORS["threads_invalid"])
 
     cfg = {
         "url": url,
@@ -876,7 +897,7 @@ def load_settings(path="settings.txt") -> dict:
         "fill_first": yesno(raw["fill_first"]),
         "label_merge": yesno(raw.get("label_merge", "no")),
         "label_strip_separators": yesno(raw.get("label_strip_separators", "yes" if yesno(raw.get("label_merge", "no")) else "no")),
-        "label_case": raw.get("label_case", "first_seen").strip().lower(),
+        "label_case": raw.get("label_case", "default").strip().lower(),
         "split_output": raw["split_output"].strip().lower(),
         "merged_meta": raw["merged_meta"].strip().lower(),
         "match_child_paths": yesno(raw["match_child_paths"]),
@@ -884,21 +905,21 @@ def load_settings(path="settings.txt") -> dict:
     }
 
     if cfg["zero_fill"] not in ("no", "adjacent", "snapshot"):
-        sys.exit("[Error] 'zero_fill' must be 'no', 'adjacent', or 'snapshot'.")
+        _error_exit(_ERRORS["zero_fill_invalid"])
 
-    if cfg["label_case"] not in ("first_seen", "lower", "upper", "sentence"):
-        sys.exit("[Error] 'label_case' must be 'first_seen', 'lower', 'upper', or 'sentence'.")
+    if cfg["label_case"] not in ("default", "lower", "upper", "sentence"):
+        _error_exit(_ERRORS["label_case_invalid"])
 
     if cfg["split_output"] not in ("no", "files", "merged"):
-        sys.exit("[Error] 'split_output' must be 'no', 'files', or 'merged'.")
+        _error_exit(_ERRORS["split_output_invalid"])
 
     if cfg["merged_meta"] not in ("interleaved", "grouped"):
-        sys.exit("[Error] 'merged_meta' must be 'interleaved' or 'grouped'.")
+        _error_exit(_ERRORS["merged_meta_invalid"])
 
     # -- collision_priority validation -------------------------------------------
     collision_priority = raw["collision_priority"].strip().lower()
     if collision_priority not in ("time", "filter"):
-        sys.exit("[Error] 'collision_priority' must be 'time' or 'filter'.")
+        _error_exit(_ERRORS["collision_priority_invalid"])
     cfg["collision_priority"] = collision_priority
 
     return cfg
@@ -964,12 +985,11 @@ def get_snapshots(cfg: dict) -> list:
                 if n_distinct > 5:
                     log(f"            ... and {n_distinct - 5} more")
                 log(f"")
-                try:
-                    answer = input("  Continue anyway? [Y/N]: ").strip().lower()
-                except EOFError:
-                    answer = "n"
-                if answer not in ("y", "yes"):
-                    sys.exit("[Aborted] Re-check your filter settings and try again.")
+                if not _confirm(
+                    _DIALOGS["many_urls"]["title"],
+                    _DIALOGS["many_urls"]["message"].format(n=n_distinct),
+                ):
+                    sys.exit(_ERRORS["aborted_filter"])
                 log(f"")
 
             return snapshots
@@ -979,7 +999,7 @@ def get_snapshots(cfg: dict) -> list:
                 log(f"[CDX]    Query failed: {clean_err} -- retrying in {cfg['delay']}s ...")
                 time.sleep(cfg["delay"])
             else:
-                sys.exit(f"[CDX]    Query failed after {cfg['retries']} attempts: {clean_err}")
+                sys.exit(_ERRORS["cdx_failed"].format(retries=cfg["retries"], error=clean_err))
 
 
 # -- Step 2: Sampling ----------------------------------------------------------
@@ -1186,11 +1206,7 @@ def _check_playwright():
         from playwright.sync_api import sync_playwright  # noqa: F401
         _playwright_available = True
     except ImportError:
-        sys.exit(
-            "[Error] 'headless_browser = yes' requires Playwright.\n"
-            "        Install it with:\n"
-            "          pip install playwright"
-        )
+        _error_exit(_ERRORS["playwright_missing"])
 
 
 # Playwright browser runs in a single dedicated thread. All fetch requests are
@@ -1310,7 +1326,7 @@ def _get_browser(n: int = 1):
     _all_browsers_ready.wait()
     if _browser_error:
         clean_err = re.sub(r'https?://\S+', '', str(_browser_error)).strip()
-        sys.exit(f"[Error]  Failed to launch Chromium: {clean_err}")
+        _error_exit(_ERRORS["chromium_failed"].format(error=clean_err))
 
 
 def _close_browser():
@@ -1850,7 +1866,7 @@ def _apply_label_case(s: str, mode: str, strip_separators: bool = False) -> str:
         return s.upper()
     if mode == "sentence":
         return s[:1].upper() + s[1:].lower() if s else s
-    return s  # first_seen: keep exactly as first encountered
+    return s  # default: no transformation
 
 
 def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
@@ -1901,7 +1917,7 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
         return url_slug(lbl)
 
     do_merge   = cfg.get("label_merge", False)
-    label_case = cfg.get("label_case", "first_seen")
+    label_case = cfg.get("label_case", "default")
     strip_seps = cfg.get("label_strip_separators", False)
 
     def build_group_data(g_results):
@@ -2198,7 +2214,7 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
         return url_slug(lbl)
 
     do_merge   = cfg.get("label_merge", False)
-    label_case = cfg.get("label_case", "first_seen")
+    label_case = cfg.get("label_case", "default")
     strip_seps = cfg.get("label_strip_separators", False)
 
     def build_pair(label_slot, value_slot):
@@ -2545,11 +2561,25 @@ def main():
 
     snapshots = get_snapshots(cfg)
     if not snapshots:
-        sys.exit("No snapshots to process.")
+        sys.exit(_ERRORS["no_snapshots"])
 
     snapshots, fallbacks_map = sample_snapshots(snapshots, cfg)
     total = len(snapshots)
     results = [None] * total
+
+    # -- Excessive API calls sanity check -------------------------------------
+    API_WARN_THRESHOLD = 500
+    if total > API_WARN_THRESHOLD:
+        log(f"\n[Warning] {total} snapshots will be fetched ({total} requests to Wayback Machine).")
+        log(f"          This may take a long time and place heavy load on the archive.")
+        log(f"          Make sure this is intended before continuing.")
+        log(f"")
+        if not _confirm(
+            _DIALOGS["high_request_count"]["title"],
+            _DIALOGS["high_request_count"]["message"].format(total=total),
+        ):
+            sys.exit(_ERRORS["aborted_settings"])
+        log(f"")
 
     if cfg["headless_browser"]:
         log(f"[Setup]  Launching {cfg['threads']} Chromium instance(s) ...")

@@ -68,7 +68,7 @@ Paste HTML tag from Inspect Element for each one.
 
 In the GUI, use the "Add Element" button to add a new element slot, and "Remove Element" to delete one.
 
-When running without the GUI, add as many `element_N` / `extract_N` pairs to `settings.txt` as needed (e.g. `element_6`, `element_7`, …). Gaps are skipped; empty slots are ignored.
+When running without the GUI, add as many `element_N` / `extract_N` pairs to `settings.txt` as needed.
 <br>
 <br>
 
@@ -108,7 +108,11 @@ All of these can be combined and stacked freely.
 ### DATE RANGE
 
 `from_date`, `to_date`  
-Format: `YYYYMMDD`. Leave blank to search all available snapshots.
+Format: `YYYY` `MM` `DD`. Leave blank to search all available snapshots.
+
+In the GUI, each date is split into three separate fields for the year, month, and day.
+
+When running without the GUI, enter dates in `settings.txt` as a single `YYYYMMDD` string
 <br>
 <br>
 ### SNAPSHOT FREQUENCY
@@ -367,8 +371,12 @@ e.g. `2` will treat the `element_2` element as the label.
 The index of the element(s) whose output become the VALUES (the changing data across snapshots) in the reformatted file,  
 e.g. `3` will treat the `element_3` element as the value to track
 
-For both fields, multiple indexes can be entered, separated by spaces. The index of the label element will be paired with the index of the value element,  
-e.g. for label elements `1` `2` and value elements `3` `4`, elements `1` and `3` will be paired and elements `2` and `4` will be paired.  
+For both fields, multiple index pairs are entered together: `label_elements` index 1 is paired with `value_elements` index 1, index 2 with index 2, and so on,  
+e.g. for label elements `1` `2` and value elements `3` `4`, elements `1` and `3` will be paired and elements `2` and `4` will be paired.
+
+In the GUI, use the "+" button to add a new pair slot and the "−" button to remove the last one. Each slot is its own entry box
+
+When running without the GUI, enter multiple indexes in `settings.txt` separated by spaces, e.g. `label_elements = 1 2`.
 <br>
 <br>
 `sort`  
@@ -388,7 +396,7 @@ How to display labels in the reformatted file:
 
 | label_case | Description |
 |---|---|
-| `first_seen` | use the label exactly as it first appears |
+| `default` | no change; use the label exactly as it appears |
 | `lower` | convert to lowercase |
 | `upper` | convert to UPPERCASE |
 | `sentence` | Capitalize first letter, rest lowercase |
@@ -431,7 +439,8 @@ Enabled automatically when `label_merge = yes`.
 <br>
 `label_merge`  
 Merge labels that are the same characters but differ only in case, spaces, or separators. (`yes` / `no`)  
-e.g. `value-1`, `Value 1`, and `VALUE_1` are all treated as the same label.
+e.g. `value-1`, `Value 1`, and `VALUE_1` are all treated as the same label.  
+When merging, the display casing of each merged group is determined by `label_case` (when set to `default`, labels are shown exactly as they appear in the data).
 
 <br>
 

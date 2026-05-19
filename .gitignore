@@ -5,7 +5,7 @@
 wayback_results*
 
 # settings file
-settings.txt
+*settings*.txt
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
