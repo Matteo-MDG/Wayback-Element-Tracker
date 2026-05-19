@@ -342,12 +342,24 @@ _DIALOGS = {
         "title":   "Unsaved Changes",
         "message": "You have unsaved changes.\nSave before closing?",
     },
+    "exit_while_running": {
+        "title":   "Exit While Running",
+        "message": (
+            "A run is currently in progress.\n"
+            "Exiting now will stop the run and save a partial log.\n\n"
+            "Exit anyway?"
+        ),
+    },
     "cannot_start": {
         "title":   "Cannot Start",
         "message": "{errors}",
     },
     "run_error": {
         "title":   "Error",
+        "message": "{msg}",
+    },
+    "run_aborted": {
+        "title":   "Run Aborted",
         "message": "{msg}",
     },
     # -- Tracker runtime confirmation dialogs ----------------------------------

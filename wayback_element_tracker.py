@@ -18,7 +18,7 @@ from wayback_dialogs import _DIALOGS, _ERRORS
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-VERSION = "v2.5.1"
+VERSION = "v2.5.2"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -290,6 +290,22 @@ def _error_exit(msg: str):
         log(msg)
         encoded = msg.replace("\\", "\\\\").replace("\n", "\\n")
         print(f"[_ERROR_ {encoded}]", flush=True)
+        sys.exit(1)
+    else:
+        sys.exit(msg)
+
+
+def _warn_exit(msg: str):
+    """
+    Exit with a warning (user-initiated cancellation). In CLI mode behaves
+    like sys.exit(msg). In GUI mode, logs the message and emits a [_WARN_]
+    signal so the GUI can show a warning messagebox (yellow icon rather than
+    red error icon), then exits cleanly with code 1.
+    """
+    if _GUI_MODE:
+        log(msg)
+        encoded = msg.replace("\\", "\\\\").replace("\n", "\\n")
+        print(f"[_WARN_ {encoded}]", flush=True)
         sys.exit(1)
     else:
         sys.exit(msg)
@@ -1005,7 +1021,7 @@ def _cdx_preflight(cfg: dict):
                     _DIALOGS["preflight_many_urls"]["title"],
                     _DIALOGS["preflight_many_urls"]["message"].format(n=n_distinct),
                 ):
-                    sys.exit(_ERRORS["preflight_aborted_urls"])
+                    _warn_exit(_ERRORS["preflight_aborted_urls"])
                 log("")
         except requests.Timeout:
             log(
@@ -1017,7 +1033,7 @@ def _cdx_preflight(cfg: dict):
                 _DIALOGS["preflight_timeout_urls"]["title"],
                 _DIALOGS["preflight_timeout_urls"]["message"],
             ):
-                sys.exit(_ERRORS["preflight_aborted_timeout_urls"])
+                _warn_exit(_ERRORS["preflight_aborted_timeout_urls"])
             log("")
         except Exception as e:
             clean_err = re.sub(r'https?://\S+', '', str(e)).strip().strip(":")
@@ -1036,7 +1052,7 @@ def _cdx_preflight(cfg: dict):
                 _DIALOGS["preflight_high_count"]["title"],
                 _DIALOGS["preflight_high_count"]["message"].format(estimate=f"{estimate:,}"),
             ):
-                sys.exit(_ERRORS["preflight_aborted_count"])
+                _warn_exit(_ERRORS["preflight_aborted_count"])
             log("")
     except requests.Timeout:
         log(
@@ -1048,7 +1064,7 @@ def _cdx_preflight(cfg: dict):
             _DIALOGS["preflight_timeout_count"]["title"],
             _DIALOGS["preflight_timeout_count"]["message"],
         ):
-            sys.exit(_ERRORS["preflight_aborted_timeout_count"])
+            _warn_exit(_ERRORS["preflight_aborted_timeout_count"])
         log("")
     except Exception as e:
         clean_err = re.sub(r'https?://\S+', '', str(e)).strip().strip(":")
@@ -1108,7 +1124,7 @@ def get_snapshots(cfg: dict) -> list:
                 log(f"[CDX]    Query failed: {clean_err} -- retrying in {cfg['delay']}s ...")
                 time.sleep(cfg["delay"])
             else:
-                sys.exit(_ERRORS["cdx_failed"].format(retries=cfg["retries"], error=clean_err))
+                _error_exit(_ERRORS["cdx_failed"].format(retries=cfg["retries"], error=clean_err))
 
 
 # -- Step 2: Sampling ----------------------------------------------------------
@@ -2671,7 +2687,7 @@ def main():
     _cdx_preflight(cfg)
     snapshots = get_snapshots(cfg)
     if not snapshots:
-        sys.exit(_ERRORS["no_snapshots"])
+        _error_exit(_ERRORS["no_snapshots"])
 
     snapshots, fallbacks_map = sample_snapshots(snapshots, cfg)
     total = len(snapshots)

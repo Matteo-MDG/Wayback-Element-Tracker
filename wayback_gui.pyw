@@ -2675,6 +2675,20 @@ class WaybackGUI:
         self._apply_always_on_top()
 
     def _on_close(self):
+        if self._running:
+            if not tk.messagebox.askyesno(
+                    _DIALOGS["exit_while_running"]["title"],
+                    _DIALOGS["exit_while_running"]["message"]):
+                return
+            # User confirmed exit while running: stop the process and save log
+            if self._proc and self._proc.poll() is None:
+                self._proc.kill()
+                self._proc.wait()
+            self._running = False
+            self._append_log("\n[GUI] Run stopped (program closed).\n")
+            if not getattr(self, "_log_saved", True):
+                self._save_run_log()
+                self._log_saved = True
         if self._unsaved:
             # askyesnocancel: Yes=Save & exit, No=Exit without saving, Cancel=go back
             result = tk.messagebox.askyesnocancel(
@@ -2812,6 +2826,7 @@ class WaybackGUI:
         self._prog_total  = 0
         self._prog_mode   = "wrap"
         self._prog_seen   = set()
+        self._log_saved   = False
         self._progress_label.configure(text="")
         self._wrap_start()
 
@@ -2851,6 +2866,7 @@ class WaybackGUI:
         self._running = False
         self._append_log("\n[GUI] Run stopped.\n")
         self._save_run_log()
+        self._log_saved = True
         self._on_done()
 
     def _save_run_log(self):
@@ -2885,6 +2901,9 @@ class WaybackGUI:
         self.root.after(0, self._on_done)
 
     def _on_done(self):
+        if not getattr(self, "_log_saved", True):
+            self._save_run_log()
+            self._log_saved = True
         self._start_btn.configure(state="normal", text="\u25b6  Start")
         self._stop_btn.configure(state="disabled")
         self._wrap_stop_anim()
@@ -2984,9 +3003,16 @@ class WaybackGUI:
             static = _ERRORS[key].split("{")[0].rstrip()
             return re.compile(re.escape(static))
 
+        # Safety-net patterns: catch any raw sys.exit("msg") calls that bypass
+        # _error_exit/_warn_exit and therefore never emit a [_ERROR_]/[_WARN_]
+        # signal. All intentional exits should use those helpers instead.
         _FATAL_PATTERNS = [
             _fatal_pattern("cdx_failed"),
             _fatal_pattern("no_snapshots"),
+            _fatal_pattern("preflight_aborted_urls"),
+            _fatal_pattern("preflight_aborted_count"),
+            _fatal_pattern("preflight_aborted_timeout_urls"),
+            _fatal_pattern("preflight_aborted_timeout_count"),
         ]
 
         def _is_fatal_exit(line: str) -> bool:
@@ -2996,6 +3022,7 @@ class WaybackGUI:
         pending_log = []
         confirm_request = None  # (title, body) if a [_CONFIRM_] signal was received
         error_requests = []     # list of error message strings from [_ERROR_] signals
+        warn_requests  = []     # list of warning message strings from [_WARN_] signals
         try:
             while True:
                 chunk = self._log_q.get_nowait()
@@ -3026,7 +3053,14 @@ class WaybackGUI:
                         error_msg = raw.replace('\\n', '\n').replace('\\\\', '\\')
                         error_requests.append(error_msg)
                         # swallow – already logged to the panel by _error_exit; dialog will show it
+                    elif chunk.strip().startswith('[_WARN_ ') and chunk.strip().endswith(']'):
+                        raw = chunk.strip()[len('[_WARN_ '):-1]
+                        warn_msg = raw.replace('\\n', '\n').replace('\\\\', '\\')
+                        warn_requests.append(warn_msg)
+                        # swallow – already logged to the panel by _warn_exit; dialog will show it
                     elif _is_fatal_exit(chunk):
+                        # Safety net: raw sys.exit() that bypassed the signal helpers.
+                        # Treat as an error dialog so it is never silently swallowed.
                         error_requests.append(chunk.strip())
                         pending_log.append(chunk)   # keep in log as well
                     else:
@@ -3071,7 +3105,14 @@ class WaybackGUI:
             except Exception:
                 pass
 
-        # -- Pass 4: show error dialogs. The message is already in the log
+        # -- Pass 4: show warning dialogs (user-initiated cancellations). The
+        # message is already in the log; the dialog confirms the run was aborted.
+        for warn_msg in warn_requests:
+            tk.messagebox.showwarning(
+                _DIALOGS["run_aborted"]["title"],
+                _DIALOGS["run_aborted"]["message"].format(msg=warn_msg))
+
+        # -- Pass 5: show error dialogs. The message is already in the log
         # (written by _error_exit before the signal); the dialog makes it
         # impossible to miss. Multiple errors are shown sequentially.
         for err_msg in error_requests:
