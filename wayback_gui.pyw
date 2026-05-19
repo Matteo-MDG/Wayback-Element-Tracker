@@ -2977,11 +2977,16 @@ class WaybackGUI:
         # writes to stderr, which is merged into stdout via stderr=STDOUT, so
         # these arrive as ordinary log lines – no special signal prefix.
         # We match them here so we can show a dialog without touching the tracker.
+        # Patterns are derived from _ERRORS so they stay in sync automatically.
+        def _fatal_pattern(key: str) -> re.Pattern:
+            # Escape the static prefix up to the first placeholder or end,
+            # so the pattern matches even when dynamic parts vary.
+            static = _ERRORS[key].split("{")[0].rstrip()
+            return re.compile(re.escape(static))
+
         _FATAL_PATTERNS = [
-            # CDX API unreachable after all retries
-            re.compile(r'\[CDX\]\s+Query failed after \d+ attempt'),
-            # URL matched zero Wayback snapshots
-            re.compile(r'^No snapshots to process\.$'),
+            _fatal_pattern("cdx_failed"),
+            _fatal_pattern("no_snapshots"),
         ]
 
         def _is_fatal_exit(line: str) -> bool:
@@ -3012,7 +3017,9 @@ class WaybackGUI:
                 else:
                     c = re.match(r'\[_CONFIRM_ (.+?)\|(.+)\]', chunk.strip())
                     if c:
-                        confirm_request = (c.group(1).strip(), c.group(2).strip())
+                        title_raw = c.group(1).strip().replace('\\n', '\n').replace('\\\\', '\\')
+                        body_raw  = c.group(2).strip().replace('\\n', '\n').replace('\\\\', '\\')
+                        confirm_request = (title_raw, body_raw)
                         # swallow – dialog replaces this line in the GUI
                     elif chunk.strip().startswith('[_ERROR_ ') and chunk.strip().endswith(']'):
                         raw = chunk.strip()[len('[_ERROR_ '):-1]
@@ -3057,7 +3064,7 @@ class WaybackGUI:
         # to the worker's stdin so input() in the worker receives it.
         if confirm_request:
             title_txt, body_txt = confirm_request
-            result = tk.messagebox.askyesno(title_txt, body_txt)
+            result = tk.messagebox.askyesno(title_txt, body_txt, icon=tk.messagebox.WARNING)
             try:
                 self._proc.stdin.write("y\n" if result else "n\n")
                 self._proc.stdin.flush()

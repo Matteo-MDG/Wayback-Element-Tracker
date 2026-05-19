@@ -264,7 +264,9 @@ def _confirm(title: str, short_msg: str) -> bool:
     Returns True if the user confirms.
     """
     if _GUI_MODE:
-        print(f"[_CONFIRM_ {title}|{short_msg}]", flush=True)
+        encoded_title = title.replace("\\", "\\\\").replace("\n", "\\n")
+        encoded_msg   = short_msg.replace("\\", "\\\\").replace("\n", "\\n")
+        print(f"[_CONFIRM_ {encoded_title}|{encoded_msg}]", flush=True)
         try:
             answer = input("").strip().lower()
         except EOFError:
@@ -925,6 +927,134 @@ def load_settings(path="settings.txt") -> dict:
     return cfg
 
 
+# -- Step 1: Preflight checks --------------------------------------------------
+PREFLIGHT_URL_THRESHOLD      = 20   # distinct URLs before warning
+PREFLIGHT_SNAPSHOT_THRESHOLD = 500  # estimated snapshots before warning
+PREFLIGHT_TIMEOUT            = 10   # seconds per preflight request
+
+def _cdx_preflight(cfg: dict):
+    """
+    Run two cheap CDX queries in parallel before the main fetch to warn the
+    user early if the query is unexpectedly large, before any hanging can occur.
+
+    1. Distinct-URL check: fetches only unique original URLs (collapse=urlkey)
+       up to PREFLIGHT_URL_THRESHOLD + 1. If the limit is hit the user is
+       warned that the query matches at least that many distinct URLs.
+       Only runs when filter_cdx_wildcard is True, since an exact URL can only
+       ever match one distinct URL.
+
+    2. Snapshot-count check: uses showNumPages=true to get a page count and
+       estimates total snapshots. If the estimate exceeds
+       PREFLIGHT_SNAPSHOT_THRESHOLD the user is warned before the main fetch.
+       Always runs, regardless of whether a CDX wildcard is used, because even
+       a single URL can accumulate an extremely large number of snapshots.
+
+    Both checks run in parallel with a short timeout. A timeout itself is
+    treated as a warning signal: if the archive cannot answer a cheap preflight
+    query within the timeout window, the main query is almost certainly
+    excessively large. Results are presented URL check first, then count check.
+    Either refusal exits immediately.
+    """
+    cdx_url = cfg["url"] + ("*" if cfg["filter_cdx_wildcard"] else "")
+    base_params = {"url": cdx_url, "filter": "statuscode:200"}
+    if cfg["from_date"]:
+        base_params["from"] = cfg["from_date"]
+    if cfg["to_date"]:
+        base_params["to"] = cfg["to_date"]
+
+    def _check_urls():
+        params = {
+            **base_params,
+            "fl":       "original",
+            "collapse": "urlkey",
+            "output":   "json",
+            "limit":    PREFLIGHT_URL_THRESHOLD + 1,
+        }
+        resp = requests.get(CDX_API, params=params, timeout=PREFLIGHT_TIMEOUT)
+        resp.raise_for_status()
+        rows = resp.json()
+        return max(0, len(rows) - 1) if rows else 0
+
+    def _check_count():
+        params = {
+            **base_params,
+            "collapse":     "digest",
+            "showNumPages": "true",
+        }
+        resp = requests.get(CDX_API, params=params, timeout=PREFLIGHT_TIMEOUT)
+        resp.raise_for_status()
+        CDX_PAGE_SIZE = 100_000
+        return int(resp.text.strip() or 0) * CDX_PAGE_SIZE
+
+    # Run checks in parallel. URL check is only meaningful for wildcard queries.
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_urls  = ex.submit(_check_urls) if cfg["filter_cdx_wildcard"] else None
+        f_count = ex.submit(_check_count)
+
+    # -- 1. Distinct-URL result (wildcard queries only) ------------------------
+    if f_urls is not None:
+        try:
+            n_distinct = f_urls.result()
+            if n_distinct > PREFLIGHT_URL_THRESHOLD:
+                log(
+                    f"[Warning] This query matches at least {n_distinct} distinct URLs.\n"
+                    f"          This may be unintentionally broad (e.g. tracking every\n"
+                    f"          sub-ID under a path like /page/1, /page/2, ...)."
+                )
+                if not _confirm(
+                    _DIALOGS["preflight_many_urls"]["title"],
+                    _DIALOGS["preflight_many_urls"]["message"].format(n=n_distinct),
+                ):
+                    sys.exit(_ERRORS["preflight_aborted_urls"])
+                log("")
+        except requests.Timeout:
+            log(
+                "[Warning] The preflight URL check timed out.\n"
+                "          This likely means the query matches an extremely large\n"
+                "          number of distinct URLs."
+            )
+            if not _confirm(
+                _DIALOGS["preflight_timeout_urls"]["title"],
+                _DIALOGS["preflight_timeout_urls"]["message"],
+            ):
+                sys.exit(_ERRORS["preflight_aborted_timeout_urls"])
+            log("")
+        except Exception as e:
+            clean_err = re.sub(r'https?://\S+', '', str(e)).strip().strip(":")
+            log(f"[CDX]    Preflight URL check failed ({clean_err}) -- skipping.")
+
+    # -- 2. Snapshot-count result (always runs) --------------------------------
+    try:
+        estimate = f_count.result()
+        if estimate > PREFLIGHT_SNAPSHOT_THRESHOLD:
+            log(
+                f"[Warning] This query will fetch roughly {estimate:,} snapshots.\n"
+                f"          This may take a long time and place heavy load on the archive.\n"
+                f"          Make sure this is intended before continuing."
+            )
+            if not _confirm(
+                _DIALOGS["preflight_high_count"]["title"],
+                _DIALOGS["preflight_high_count"]["message"].format(estimate=f"{estimate:,}"),
+            ):
+                sys.exit(_ERRORS["preflight_aborted_count"])
+            log("")
+    except requests.Timeout:
+        log(
+            "[Warning] The preflight snapshot count check timed out.\n"
+            "          This likely means the query will fetch an extremely large\n"
+            "          number of snapshots."
+        )
+        if not _confirm(
+            _DIALOGS["preflight_timeout_count"]["title"],
+            _DIALOGS["preflight_timeout_count"]["message"],
+        ):
+            sys.exit(_ERRORS["preflight_aborted_timeout_count"])
+        log("")
+    except Exception as e:
+        clean_err = re.sub(r'https?://\S+', '', str(e)).strip().strip(":")
+        log(f"[CDX]    Preflight count check failed ({clean_err}) -- skipping.")
+
+
 # -- Step 1: Get Snapshot List -------------------------------------------------
 def get_snapshots(cfg: dict) -> list:
     cdx_url = cfg["url"] + ("*" if cfg["filter_cdx_wildcard"] else "")
@@ -970,27 +1100,6 @@ def get_snapshots(cfg: dict) -> list:
                     f"[CDX]    {len(snapshots)} of {before} snapshots passed "
                     f"filter(s): {raw_display!r}."
                 )
-
-            # -- Distinct-URL sanity check ---------------------------------
-            distinct_urls = list(dict.fromkeys(s["original"] for s in snapshots))
-            n_distinct = len(distinct_urls)
-            WARN_THRESHOLD = 20
-            if n_distinct > WARN_THRESHOLD:
-                log(f"\n[Warning] Your filter matched {n_distinct} distinct URLs.")
-                log(f"          This may be unintentionally broad (e.g. tracking every")
-                log(f"          sub-ID under a path like /page/1, /page/2, ...).")
-                preview = distinct_urls[:5]
-                for u in preview:
-                    log(f"            {u}")
-                if n_distinct > 5:
-                    log(f"            ... and {n_distinct - 5} more")
-                log(f"")
-                if not _confirm(
-                    _DIALOGS["many_urls"]["title"],
-                    _DIALOGS["many_urls"]["message"].format(n=n_distinct),
-                ):
-                    sys.exit(_ERRORS["aborted_filter"])
-                log(f"")
 
             return snapshots
         except Exception as e:
@@ -2559,6 +2668,7 @@ def main():
     if cfg["headless_browser"]:
         _check_playwright()
 
+    _cdx_preflight(cfg)
     snapshots = get_snapshots(cfg)
     if not snapshots:
         sys.exit(_ERRORS["no_snapshots"])
@@ -2566,20 +2676,6 @@ def main():
     snapshots, fallbacks_map = sample_snapshots(snapshots, cfg)
     total = len(snapshots)
     results = [None] * total
-
-    # -- Excessive API calls sanity check -------------------------------------
-    API_WARN_THRESHOLD = 500
-    if total > API_WARN_THRESHOLD:
-        log(f"\n[Warning] {total} snapshots will be fetched ({total} requests to Wayback Machine).")
-        log(f"          This may take a long time and place heavy load on the archive.")
-        log(f"          Make sure this is intended before continuing.")
-        log(f"")
-        if not _confirm(
-            _DIALOGS["high_request_count"]["title"],
-            _DIALOGS["high_request_count"]["message"].format(total=total),
-        ):
-            sys.exit(_ERRORS["aborted_settings"])
-        log(f"")
 
     if cfg["headless_browser"]:
         log(f"[Setup]  Launching {cfg['threads']} Chromium instance(s) ...")

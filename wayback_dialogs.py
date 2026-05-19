@@ -351,13 +351,41 @@ _DIALOGS = {
         "message": "{msg}",
     },
     # -- Tracker runtime confirmation dialogs ----------------------------------
-    "many_urls": {
+    "preflight_many_urls": {
         "title":   "Many distinct URLs",
-        "message": "Your filter matched {n} distinct URLs. Continue anyway?",
+        "message": (
+            "This query will match at least {n} distinct URLs.\n"
+            "This may be unintentionally broad (e.g. tracking every sub-ID "
+            "under a path like /page/1, /page/2, ...).\n"
+            "Continue anyway?"
+        ),
     },
-    "high_request_count": {
+    "preflight_high_count": {
         "title":   "High request count",
-        "message": "{total} snapshots will be fetched. This may take a long time. Continue anyway?",
+        "message": (
+            "This query will fetch roughly {estimate} snapshots.\n"
+            "This may take a long time and place heavy load on the archive. "
+            "Make sure this is intended.\n"
+            "Continue anyway?"
+        ),
+    },
+    "preflight_timeout_urls": {
+        "title":   "URL check timed out",
+        "message": (
+            "The preflight URL check timed out.\n"
+            "This likely means the query matches an extremely large number of "
+            "distinct URLs.\n"
+            "Continue anyway?"
+        ),
+    },
+    "preflight_timeout_count": {
+        "title":   "Snapshot count check timed out",
+        "message": (
+            "The preflight snapshot count check timed out.\n"
+            "This likely means the query will fetch an extremely large number "
+            "of snapshots.\n"
+            "Continue anyway?"
+        ),
     },
 }
 
@@ -438,7 +466,10 @@ _ERRORS = {
     ),
     "chromium_failed":           "[Error]  Failed to launch Chromium: {error}",
     "no_snapshots":              "No snapshots to process.",
-    "aborted_filter":            "[Aborted] Re-check your filter settings and try again.",
-    "aborted_settings":          "[Aborted] Re-check your settings and try again.",
+    "preflight_aborted_urls":    "[Aborted] Re-check your filter settings and try again.",
+    "preflight_aborted_count":   "[Aborted] Re-check your settings and try again.",
+    "preflight_aborted_timeout_urls":  "[Aborted] Re-check your filter settings and try again.",
+    "preflight_aborted_timeout_count": "[Aborted] Re-check your settings and try again.",
     "cdx_failed":                "[CDX]    Query failed after {retries} attempts: {error}",
+    "preflight_failed":          "[CDX]    Preflight check failed: {error}",
 }
