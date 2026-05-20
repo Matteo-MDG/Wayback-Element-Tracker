@@ -350,6 +350,14 @@ _DIALOGS = {
             "Exit anyway?"
         ),
     },
+    "stop_confirm": {
+        "title":   "Stop Run",
+        "message": (
+            "A run is currently in progress.\n"
+            "Stopping now will save a partial log.\n\n"
+            "Stop anyway?"
+        ),
+    },
     "cannot_start": {
         "title":   "Cannot Start",
         "message": "{errors}",
@@ -430,6 +438,9 @@ _ERRORS = {
         "'Label Elements' and 'Value Elements' must contain "
         "integer slot numbers."
     ),
+    "val_date_range":          (
+        "'From Date' ({from_date}) must not be later than 'To Date' ({to_date})."
+    ),
 
     # -- Tracker settings validation (wayback_element_tracker.py) -------------
     "parse_element": (
@@ -443,6 +454,8 @@ _ERRORS = {
     "csv_layout_invalid":        "[Error] 'csv_layout' must be 'columns' or 'rows'",
     "year_digits_invalid":       "[Error] 'year_digits' must be '2' or '4'",
     "date_format_invalid":       "[Error] '{field}' must be in YYYYMMDD format (e.g. 20231105), got: {val!r}",
+    "date_calendar_invalid":      "[Error] '{field}' is not a valid calendar date (got: {val!r}). Check the month and day values.",
+    "date_range_reversed":        "[Error] 'from_date' ({from_date}) must not be later than 'to_date' ({to_date}).",
     "min_gap_invalid":           "[Error] 'min_gap' must be a number >= 0, e.g. 0.5",
     "fallback_candidates_invalid": "[Error] 'fallback_candidates' must be an integer >= 0",
     "end_passes_invalid":        "[Error] 'end_passes' must be an integer >= 0",
@@ -465,6 +478,8 @@ _ERRORS = {
         "[Error] At least one element_N must be set in settings.txt\n"
         "        (e.g. element_1 = <p class=\"...\">...</p>)."
     ),
+    "delay_invalid":             "[Error] 'delay' must be a number >= 0 (got: {val!r}).",
+    "retries_invalid":           "[Error] 'retries' must be an integer >= 0 (got: {val!r}).",
     "threads_invalid":           "[Error] 'threads' must be a positive integer.",
     "zero_fill_invalid":         "[Error] 'zero_fill' must be 'no', 'adjacent', or 'snapshot'.",
     "label_case_invalid":        "[Error] 'label_case' must be 'default', 'lower', 'upper', or 'sentence'.",

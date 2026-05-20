@@ -372,7 +372,7 @@ class WaybackGUI:
         self._pairs_qbtns            = []
         self._running = False
         self._proc = None
-        self._run_thread = None
+        self._run_thread = None   # saved so _on_close can join it before saving the log
         self._log_q = _queue.Queue()
         self._bound_shortcuts = {}   # action -> (sequence, func_id)
         self._switching_tab_kb = False   # suppresses TabChangedHandler focus-move on keyboard tab switch
@@ -854,6 +854,112 @@ class WaybackGUI:
         widget.bind("<Right>",       _right)
         widget.bind("<Shift-Left>",  _shift_left)
         widget.bind("<Shift-Right>", _shift_right)
+
+    def _bind_date_field_nav(self, y_entry, m_entry, d_entry):
+        """Arrow-key navigation across the three date sub-fields (Y / M / D).
+
+        Left / Right: move the cursor normally within the focused field; when
+        already at the edge, jump focus to the neighbouring field.
+
+        Up   : move cursor to the start of the current field.
+        Down : move cursor to the end of the current field.
+        """
+
+        def _move_cursor_left(w):
+            pos = w.index("insert")
+            if pos == 0:
+                return False
+            w.icursor(pos - 1)
+            if w.index("@0") > pos - 1:
+                w.xview_scroll(-1, "units")
+            return True
+
+        def _move_cursor_right(w):
+            pos = w.index("insert")
+            end = w.index("end")
+            if pos >= end:
+                return False
+            w.icursor(pos + 1)
+            width = w.winfo_width()
+            if width > 1 and w.index(f"@{width - 1}") < pos + 1:
+                w.xview_scroll(1, "units")
+            return True
+
+        # ---- Y entry -------------------------------------------------------
+        def _y_left(e):
+            _move_cursor_left(y_entry)
+            return "break"
+
+        def _y_right(e):
+            if not _move_cursor_right(y_entry):
+                m_entry.focus_set()
+                m_entry.icursor(0)
+                m_entry.xview_moveto(0)
+            return "break"
+
+        def _y_up(e):
+            y_entry.icursor(0); y_entry.xview_moveto(0)
+            return "break"
+
+        def _y_down(e):
+            y_entry.icursor("end"); y_entry.xview_moveto(1)
+            return "break"
+
+        # ---- M entry -------------------------------------------------------
+        def _m_left(e):
+            if not _move_cursor_left(m_entry):
+                y_entry.focus_set()
+                y_entry.icursor("end")
+                y_entry.xview_moveto(1)
+            return "break"
+
+        def _m_right(e):
+            if not _move_cursor_right(m_entry):
+                d_entry.focus_set()
+                d_entry.icursor(0)
+                d_entry.xview_moveto(0)
+            return "break"
+
+        def _m_up(e):
+            m_entry.icursor(0); m_entry.xview_moveto(0)
+            return "break"
+
+        def _m_down(e):
+            m_entry.icursor("end"); m_entry.xview_moveto(1)
+            return "break"
+
+        # ---- D entry -------------------------------------------------------
+        def _d_left(e):
+            if not _move_cursor_left(d_entry):
+                m_entry.focus_set()
+                m_entry.icursor("end")
+                m_entry.xview_moveto(1)
+            return "break"
+
+        def _d_right(e):
+            _move_cursor_right(d_entry)
+            return "break"
+
+        def _d_up(e):
+            d_entry.icursor(0); d_entry.xview_moveto(0)
+            return "break"
+
+        def _d_down(e):
+            d_entry.icursor("end"); d_entry.xview_moveto(1)
+            return "break"
+
+        y_entry.bind("<Left>",  _y_left)
+        y_entry.bind("<Right>", _y_right)
+        y_entry.bind("<Up>",    _y_up)
+        y_entry.bind("<Down>",  _y_down)
+        m_entry.bind("<Left>",  _m_left)
+        m_entry.bind("<Right>", _m_right)
+        m_entry.bind("<Up>",    _m_up)
+        m_entry.bind("<Down>",  _m_down)
+        d_entry.bind("<Left>",  _d_left)
+        d_entry.bind("<Right>", _d_right)
+        d_entry.bind("<Up>",    _d_up)
+        d_entry.bind("<Down>",  _d_down)
 
     def _combo(self, parent, key, values, width=14, editable=False):
         cb = ttk.Combobox(parent, textvariable=self._var(key), values=values,
@@ -1453,22 +1559,22 @@ class WaybackGUI:
         ttk.Label(frame, text="Y").pack(side="left")
         y_entry = ttk.Entry(frame, textvariable=y_var, width=5)
         y_entry.pack(side="left", padx=(2, 8))
-        self._bind_arrow_nav(y_entry)
         self._bind_smooth_drag_scroll(y_entry)
 
         ttk.Label(frame, text="M").pack(side="left")
         m_entry = ttk.Entry(frame, textvariable=m_var, width=3)
         m_entry.pack(side="left", padx=(2, 8))
-        self._bind_arrow_nav(m_entry)
         self._bind_smooth_drag_scroll(m_entry)
 
         ttk.Label(frame, text="D").pack(side="left")
         d_entry = ttk.Entry(frame, textvariable=d_var, width=3)
         d_entry.pack(side="left", padx=(2, 0))
-        self._bind_arrow_nav(d_entry)
         self._bind_smooth_drag_scroll(d_entry)
 
+        self._bind_date_field_nav(y_entry, m_entry, d_entry)
+
         if tip_key:
+
             tip = _TIPS.get(tip_key, "")
             if tip:
                 qbtn = ttk.Button(frame, text="?", width=2)
@@ -1487,6 +1593,25 @@ class WaybackGUI:
         y_var.trace_add("write", _on_change)
         m_var.trace_add("write", _on_change)
         d_var.trace_add("write", _on_change)
+
+        return y_entry, m_entry, d_entry
+
+    def _link_date_rows(self, from_entries, to_entries):
+        """Link Up/Down arrows between the From and To date rows.
+
+        Down on a From field jumps focus to the same field (Y/M/D) in the To
+        row; Up on a To field jumps back to the same field in the From row.
+        This mirrors how _bind_pair_entry_nav handles Down on le / Up on ve.
+        """
+        for from_e, to_e in zip(from_entries, to_entries):
+            def _from_down(e, _to=to_e):
+                _to.focus_set()
+                return "break"
+            def _to_up(e, _from=from_e):
+                _from.focus_set()
+                return "break"
+            from_e.bind("<Down>", _from_down)
+            to_e.bind("<Up>",     _to_up)
 
     def _sync_date_composite(self, prefix):
         """Combine <prefix>_date_y/m/d into a YYYYMMDD string in <prefix>_date.
@@ -1530,8 +1655,9 @@ class WaybackGUI:
         r = 0
 
         self._section(f, r, "Date Range"); r += 1
-        self._build_date_row(f, r, "From Date", "from", "from_date"); r += 1
-        self._build_date_row(f, r, "To Date",   "to",   "to_date");   r += 1
+        _from_entries = self._build_date_row(f, r, "From Date", "from", "from_date"); r += 1
+        _to_entries   = self._build_date_row(f, r, "To Date",   "to",   "to_date");   r += 1
+        self._link_date_rows(_from_entries, _to_entries)
 
         self._sep(f, r); r += 1
         self._section(f, r, "Snapshot Frequency"); r += 1
@@ -2674,6 +2800,34 @@ class WaybackGUI:
         self._rebind_shortcuts()
         self._apply_always_on_top()
 
+    def _drain_log_queue(self):
+        """Flush all pending items from _log_q into the log widget.
+
+        Called before saving a partial log on exit so that lines the reader
+        thread put into the queue but _poll_log hasn't processed yet are not
+        silently dropped from the saved file.  Progress signals and internal
+        GUI-only signals are discarded; everything else is appended as-is.
+        """
+        pending = []
+        try:
+            while True:
+                chunk = self._log_q.get_nowait()
+                # Discard internal signals (same logic as _poll_log)
+                if re.search(r'\[_PROG_ \d+/\d+\]', chunk):
+                    continue
+                stripped = chunk.strip()
+                if re.match(r'\[_CONFIRM_ ', stripped):
+                    continue
+                if stripped.startswith('[_ERROR_ ') and stripped.endswith(']'):
+                    continue
+                if stripped.startswith('[_WARN_ ') and stripped.endswith(']'):
+                    continue
+                pending.append(chunk)
+        except _queue.Empty:
+            pass
+        if pending:
+            self._append_log("".join(pending))
+
     def _on_close(self):
         if self._running:
             if not tk.messagebox.askyesno(
@@ -2685,6 +2839,12 @@ class WaybackGUI:
                 self._proc.kill()
                 self._proc.wait()
             self._running = False
+            # Wait briefly for the reader thread to finish draining the pipe,
+            # then flush any queued lines into the widget so the saved log is
+            # complete up to the point the process was killed.
+            if self._run_thread and self._run_thread.is_alive():
+                self._run_thread.join(timeout=2.0)
+            self._drain_log_queue()
             self._append_log("\n[GUI] Run stopped (program closed).\n")
             if not getattr(self, "_log_saved", True):
                 self._save_run_log()
@@ -2776,7 +2936,17 @@ class WaybackGUI:
             except (ValueError, TypeError):
                 errors.append(_ERRORS["val_threads"].format(val=val))
 
-        # 4. Reformat pair validation (only when reformat = yes)
+        # 4. Date range: from_date must not be later than to_date
+        from_date = self._var("from_date").get().strip()
+        to_date   = self._var("to_date").get().strip()
+        if from_date and to_date:
+            if from_date > to_date:
+                errors.append(_ERRORS["val_date_range"].format(
+                    from_date=f"{from_date[:4]}-{from_date[4:6]}-{from_date[6:8]}",
+                    to_date=f"{to_date[:4]}-{to_date[4:6]}-{to_date[6:8]}",
+                ))
+
+        # 5. Reformat pair validation (only when reformat = yes)
         if self._var("reformat").get() == "yes":
             rl = self._var("label_elements").get().strip()
             rv = self._var("value_elements").get().strip()
@@ -2855,15 +3025,23 @@ class WaybackGUI:
             self._running = False
             self._on_done()
             return
-        threading.Thread(target=self._read_proc, daemon=True).start()
+        self._run_thread = threading.Thread(target=self._read_proc, daemon=True)
+        self._run_thread.start()
 
     def _stop(self):
         if not self._running:
+            return
+        if not tk.messagebox.askyesno(
+                _DIALOGS["stop_confirm"]["title"],
+                _DIALOGS["stop_confirm"]["message"]):
             return
         if self._proc and self._proc.poll() is None:
             self._proc.kill()
             self._proc.wait()
         self._running = False
+        if self._run_thread and self._run_thread.is_alive():
+            self._run_thread.join(timeout=2.0)
+        self._drain_log_queue()
         self._append_log("\n[GUI] Run stopped.\n")
         self._save_run_log()
         self._log_saved = True
@@ -2898,7 +3076,10 @@ class WaybackGUI:
             self._log_q.put(line)
         self._proc.wait()
         self._running = False
-        self.root.after(0, self._on_done)
+        try:
+            self.root.after(0, self._on_done)
+        except Exception:
+            pass  # window already destroyed (e.g. closed while running)
 
     def _on_done(self):
         if not getattr(self, "_log_saved", True):
@@ -3042,11 +3223,17 @@ class WaybackGUI:
                             text=f"{self._prog_done} / {total}  ({pct}%)")
                     # swallow – never add to the log widget
                 else:
-                    c = re.match(r'\[_CONFIRM_ (.+?)\|(.+)\]', chunk.strip())
+                    c = re.match(r'\[_CONFIRM_ (.+)\]', chunk.strip(), re.DOTALL)
                     if c:
-                        title_raw = c.group(1).strip().replace('\\n', '\n').replace('\\\\', '\\')
-                        body_raw  = c.group(2).strip().replace('\\n', '\n').replace('\\\\', '\\')
-                        confirm_request = (title_raw, body_raw)
+                        # Split on first unescaped | (encoder escapes literal | as \|)
+                        inner = c.group(1)
+                        sep = re.search(r'(?<!\\)\|', inner)
+                        if sep:
+                            title_enc = inner[:sep.start()]
+                            body_enc  = inner[sep.end():]
+                            def _decode(s):
+                                return s.strip().replace('\\n', '\n').replace('\\|', '|').replace('\\\\', '\\')
+                            confirm_request = (_decode(title_enc), _decode(body_enc))
                         # swallow – dialog replaces this line in the GUI
                     elif chunk.strip().startswith('[_ERROR_ ') and chunk.strip().endswith(']'):
                         raw = chunk.strip()[len('[_ERROR_ '):-1]

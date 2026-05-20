@@ -18,7 +18,7 @@ from wayback_dialogs import _DIALOGS, _ERRORS
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-VERSION = "v2.5.2"
+VERSION = "v2.5.3"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -28,7 +28,7 @@ FREQ_MAP = {
     "all": None,
     "hourly": "%Y%m%d%H",
     "daily": "%Y%m%d",
-    "weekly": "%Y%W",
+    "weekly": "%G%V",  # ISO week: %G=ISO year, %V=ISO week (avoids %Y/%W year-boundary mismatch)
     "monthly": "%Y%m",
     "yearly": "%Y",
 }
@@ -41,6 +41,11 @@ FREQ_SECONDS = {
     "monthly": 2592000,
     "yearly": 31536000,
 }
+
+# Characters that are special in CSS selectors and must be escaped with a
+# backslash when they appear inside a class name or id (e.g. Tailwind's
+# "md:flex", "w-[100px]").  BeautifulSoup's .select() honours the escapes.
+_CSS_SPECIAL_RE = re.compile(r'([:,!#$%&()*+./;<=>?@\[\]^{\|}~])')
 
 KNOWN_ATTRS = [
     "title", "href", "src", "value", "content",
@@ -93,6 +98,12 @@ def parse_filters(val: str) -> tuple:
             continue
         negate = token.startswith("!")
         t = token[1:].strip() if negate else token
+        # Guard against double-negation (e.g. "!!subpage") which would leave
+        # a leading "!" in `t` and produce a nonsensical exact-match pattern.
+        if t.startswith("!"):
+            log(f"[Warning] Filter token {token!r} has multiple '!' prefixes. "
+                "Only one negation prefix is supported -- token ignored.")
+            continue
 
         if t == "*":
             cdx_wildcard = True
@@ -125,22 +136,27 @@ def _single_filter_matches(url: str, pattern: str | None, mode: str,
     if not case_sensitive and pattern is not None:
         url = url.lower()
         pattern = pattern.lower()
-    if mode == "path":
-        # Segment-boundary match: pattern must appear as a complete path segment.
-        # With match_child_paths=True:  also matches deeper children (/a matches /a/b/c)
-        # With match_child_paths=False: only matches the exact end of the path
-        path = urlparse(url).path
-        idx = path.find(pattern)
-        if idx == -1:
-            return False
-        end = idx + len(pattern)
-        if match_child_paths:
-            return end == len(path) or path[end] == "/"
-        else:
-            return end == len(path)
-    if mode == "path_prefix":
-        # Prefix/substring match within the path only.
-        return pattern in urlparse(url).path
+    if mode in ("path", "path_prefix"):
+        # Decode percent-encoding in the URL path so filters like /café
+        # match URLs stored as /caf%C3%A9 in the CDX index.
+        raw_path = urlparse(url).path
+        path = unquote(raw_path)
+        if not case_sensitive:
+            path = path.lower()
+        if mode == "path":
+            # Segment-boundary match: pattern must appear as a complete path segment.
+            # With match_child_paths=True:  also matches deeper children (/a matches /a/b/c)
+            # With match_child_paths=False: only matches the exact end of the path
+            idx = path.find(pattern)
+            if idx == -1:
+                return False
+            end = idx + len(pattern)
+            if match_child_paths:
+                return end == len(path) or path[end] == "/"
+            else:
+                return end == len(path)
+        # path_prefix: substring match within the decoded path
+        return pattern in path
     if mode == "contains":
         return pattern in url
     # mode == "exact": pattern must be one of the individual query-string parameters.
@@ -242,16 +258,29 @@ def buffer_and_flush(index: int, msg: str, total: int = 0):
 
 
 def drain_buffer():
-    """Flush all remaining consecutive buffer entries.
-    Call this after a threaded run_pass to ensure all output is printed
-    before any subsequent log messages.
+    """Flush all remaining buffered entries after a threaded run_pass.
+
+    First flushes consecutive entries in order (normal path). Then, if any
+    entries remain (because a thread crashed without calling buffer_and_flush
+    for its index, leaving a gap), flushes them sorted by index so no output
+    is silently lost.
     """
     with _print_lock:
+        # Phase 1: flush consecutive run as usual
         while _next_to_print[0] in _print_buffer:
             m = _print_buffer.pop(_next_to_print[0])
             print(m, flush=True)
             _log_lines.append(m)
             _next_to_print[0] += 1
+        # Phase 2: flush any orphaned entries left by crashed threads
+        if _print_buffer:
+            log("[Warning] Some snapshot outputs were out-of-order or missing "
+                "(a thread may have crashed). Flushing remaining buffered output.")
+            for idx in sorted(_print_buffer):
+                m = _print_buffer[idx]
+                print(m, flush=True)
+                _log_lines.append(m)
+            _print_buffer.clear()
 
 
 def _confirm(title: str, short_msg: str) -> bool:
@@ -264,8 +293,8 @@ def _confirm(title: str, short_msg: str) -> bool:
     Returns True if the user confirms.
     """
     if _GUI_MODE:
-        encoded_title = title.replace("\\", "\\\\").replace("\n", "\\n")
-        encoded_msg   = short_msg.replace("\\", "\\\\").replace("\n", "\\n")
+        encoded_title = title.replace("\\", "\\\\").replace("\n", "\\n").replace("|", "\\|")
+        encoded_msg   = short_msg.replace("\\", "\\\\").replace("\n", "\\n").replace("|", "\\|")
         print(f"[_CONFIRM_ {encoded_title}|{encoded_msg}]", flush=True)
         try:
             answer = input("").strip().lower()
@@ -414,10 +443,13 @@ def parse_element_html(raw: str, slot: int) -> tuple:
         classes = element.get("class", [])
         sel = element.name
         if classes:
-            sel += "." + ".".join(classes)
+            # Escape CSS special characters so selectors remain valid for
+            # class names like Tailwind's "md:flex", "w-[100px]", etc.
+            escaped = [_CSS_SPECIAL_RE.sub(r'\\\1', c) for c in classes]
+            sel += "." + ".".join(escaped)
         elem_id = element.get("id", "").strip()
         if elem_id:
-            sel += "#" + elem_id
+            sel += "#" + _CSS_SPECIAL_RE.sub(r'\\\1', elem_id)
         return sel, get_extractable_attrs(element)
 
     steps = []
@@ -447,7 +479,11 @@ def parse_element_html(raw: str, slot: int) -> tuple:
     if not has_closing_tag:
         suffix_text = re.sub(r'<[^>]+>', '', suffix)
         for n in re.findall(r'\b(\d+)\b', suffix_text):
-            steps.append({"sel": None, "nth": int(n)})
+            nth_val = int(n)
+            if nth_val < 1:
+                log(f"[Warning] element_{slot}: child index {nth_val} is invalid "
+                    "(indices are 1-based). This step will never match any element.")
+            steps.append({"sel": None, "nth": nth_val})
             extractables = []                        # no known attrs for bare steps
 
     return steps, extractables
@@ -517,6 +553,24 @@ def format_datetime(dt: datetime, cfg: dict) -> tuple:
     date_str = format_date(dt, cfg).strip() if show_any_date else ""
     time_str = format_time(dt, cfg) if cfg["show_time"] else ""
     return date_str, time_str
+
+
+def _result_key(r: dict) -> str:
+    """Return a unique, chronologically-sortable key for a result entry.
+
+    Real snapshots use their Wayback timestamp (always unique).
+    Padding entries have timestamp='' and instead carry a '_pad_key' set to
+    the period's anchor datetime — also unique per period and directly
+    comparable to real timestamps for sort ordering.
+
+    This key is used internally for column alignment in the merged-CSV rows
+    layout so that hiding show_month/show_day/show_year never causes two
+    snapshots to share a column or lose data.  The display string (r["date"])
+    is only used for the column header label.
+    """
+    if not r:
+        return ""
+    return r["timestamp"] if r.get("timestamp") else r.get("_pad_key", "")
 
 
 def ts_to_dt(timestamp: str) -> datetime:
@@ -717,7 +771,7 @@ def load_settings(path="settings.txt") -> dict:
             if not raw.get(f"extract_{_n}"):
                 raw[f"extract_{_n}"] = "text"
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:  # utf-8-sig strips BOM if present
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -766,8 +820,16 @@ def load_settings(path="settings.txt") -> dict:
         _error_exit(_ERRORS["year_digits_invalid"])
     for field in ("from_date", "to_date"):
         val = raw[field]
-        if val and (not val.isdigit() or len(val) != 8):
-            _error_exit(_ERRORS["date_format_invalid"].format(field=field, val=val))
+        if val:
+            if not val.isdigit() or len(val) != 8:
+                _error_exit(_ERRORS["date_format_invalid"].format(field=field, val=val))
+            try:
+                datetime.strptime(val, "%Y%m%d")
+            except ValueError:
+                _error_exit(_ERRORS["date_calendar_invalid"].format(field=field, val=val))
+    if raw["from_date"] and raw["to_date"] and raw["from_date"] > raw["to_date"]:
+        _error_exit(_ERRORS["date_range_reversed"].format(
+            from_date=raw["from_date"], to_date=raw["to_date"]))
 
     try:
         min_gap_frac = float(raw["min_gap"])
@@ -864,6 +926,20 @@ def load_settings(path="settings.txt") -> dict:
 
     if not elements:
         _error_exit(_ERRORS["element_missing"])
+
+    try:
+        delay_val = float(raw["delay"])
+        if delay_val < 0:
+            raise ValueError
+    except ValueError:
+        _error_exit(_ERRORS["delay_invalid"].format(val=raw["delay"]))
+
+    try:
+        retries_val = int(raw["retries"])
+        if retries_val < 0:
+            raise ValueError
+    except ValueError:
+        _error_exit(_ERRORS["retries_invalid"].format(val=raw["retries"]))
 
     try:
         threads = int(raw["threads"])
@@ -1087,7 +1163,8 @@ def get_snapshots(cfg: dict) -> list:
         params["to"] = cfg["to_date"]
 
     log(f"[CDX]    Querying snapshots for: {cdx_url}")
-    for attempt in range(1, cfg["retries"] + 1):
+    max_attempts = max(cfg["retries"], 1)
+    for attempt in range(1, max_attempts + 1):
         try:
             resp = requests.get(CDX_API, params=params, timeout=30)
             resp.raise_for_status()
@@ -1120,11 +1197,11 @@ def get_snapshots(cfg: dict) -> list:
             return snapshots
         except Exception as e:
             clean_err = re.sub(r'https?://\S+', '', str(e)).strip().strip(":")
-            if attempt < cfg["retries"]:
+            if attempt < max_attempts:
                 log(f"[CDX]    Query failed: {clean_err} -- retrying in {cfg['delay']}s ...")
                 time.sleep(cfg["delay"])
             else:
-                _error_exit(_ERRORS["cdx_failed"].format(retries=cfg["retries"], error=clean_err))
+                _error_exit(_ERRORS["cdx_failed"].format(retries=max_attempts, error=clean_err))
 
 
 # -- Step 2: Sampling ----------------------------------------------------------
@@ -1514,7 +1591,8 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
 
         hit_definitive = False
 
-        for attempt in range(1, cfg["retries"] + 1):
+        max_attempts = max(cfg["retries"], 1)
+        for attempt in range(1, max_attempts + 1):
             try:
                 if cfg["headless_browser"]:
                     selectors = [
@@ -1643,8 +1721,8 @@ def fetch_snapshot(session, index: int, total: int, timestamp: str,
                 else:
                     last_err = re.sub(r'https?://\S+', '', raw_err).strip()
 
-            if attempt < cfg["retries"] and not hit_definitive:
-                retry_notice = f"  -> attempt {attempt}/{cfg['retries']} failed: {last_err} -- retrying ..."
+            if attempt < max_attempts and not hit_definitive:
+                retry_notice = f"  -> attempt {attempt}/{max_attempts} failed: {last_err} -- retrying ..."
                 if buffered:
                     extra_lines.append(retry_notice)
                 else:
@@ -1715,6 +1793,7 @@ def apply_padding(results: list, cfg: dict) -> list:
             date_str, time_str = format_datetime(anchor_dt, cfg)
             padded.append({
                 "timestamp": "",
+                "_pad_key": anchor_dt.strftime("%Y%m%d%H%M%S"),
                 "date": date_str,
                 "time": time_str,
                 "elem_values": {elem["slot"]: [] for elem in elements},
@@ -1791,30 +1870,45 @@ def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
         padded_groups.append((suffix, apply_padding(group_results, cfg)))
 
     if layout == "rows":
-        # Build unified sorted date list
-        all_dates: list = []
-        seen_dates: set = set()
+        # Build unified sorted column list keyed by unique result key, not by
+        # the display date string.  Two snapshots with the same display label
+        # (because some date fields are hidden) must still occupy separate
+        # columns; the display string is only used for the header row.
+        all_cols: list = []
+        seen_keys: set = set()
         for _, g_results in padded_groups:
             for r in g_results:
-                d = r["date"] if r else ""
-                if d and d not in seen_dates:
-                    seen_dates.add(d)
-                    all_dates.append((r["timestamp"] if r else "", d))
-        all_dates.sort(key=lambda x: x[0])
-        date_order = [d for _, d in all_dates]
+                if not r:
+                    continue
+                k = _result_key(r)
+                if k and k not in seen_keys:
+                    seen_keys.add(k)
+                    all_cols.append((k, r["date"]))
+        all_cols.sort(key=lambda x: x[0])
+        key_order   = [k for k, _ in all_cols]   # unique internal keys (timestamps / pad keys)
+        label_order = [d for _, d in all_cols]   # display strings for the header row only
 
         def group_lookup(g_results):
-            return {r["date"]: r for r in g_results if r and r.get("date")}
+            """Build key->result mapping. Each result has a unique key so
+            no data is ever dropped regardless of display date collisions."""
+            lookup = {}
+            for r in g_results:
+                if not r:
+                    continue
+                k = _result_key(r)
+                if k:
+                    lookup[k] = r
+            return lookup
 
         with open(output_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
 
-            writer.writerow(["date"] + date_order)
+            writer.writerow(["date"] + label_order)
             if show_time:
                 lookups = [group_lookup(g) for _, g in padded_groups]
                 time_row = ["time"]
-                for d in date_order:
-                    val = next((lk[d]["time"] for lk in lookups if d in lk), "")
+                for k in key_order:
+                    val = next((lk[k]["time"] for lk in lookups if k in lk), "")
                     time_row.append(val)
                 writer.writerow(time_row)
 
@@ -1826,9 +1920,9 @@ def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
 
                 # url and error labelled with suffix
                 writer.writerow([f"url ({suffix})"] +
-                                 [lk[d]["url"]   if d in lk else "" for d in date_order])
+                                 [lk[k]["url"]   if k in lk else "" for k in key_order])
                 writer.writerow([f"error ({suffix})"] +
-                                 [lk[d]["error"] if d in lk else "" for d in date_order])
+                                 [lk[k]["error"] if k in lk else "" for k in key_order])
 
                 # Element rows
                 max_per_slot = {}
@@ -1850,8 +1944,8 @@ def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
                                       else f"{sel} [{i+1}] ({ext})")
                         row_label = f"{base_label} ({suffix})"
                         row = [row_label]
-                        for d in date_order:
-                            r    = lk.get(d)
+                        for k in key_order:
+                            r    = lk.get(k)
                             vals = r["elem_values"].get(slot, []) if r else []
                             row.append(vals[i] if i < len(vals) else "")
                         writer.writerow(row)
@@ -2048,6 +2142,7 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
     def build_group_data(g_results):
         g_results = apply_padding(g_results, cfg)
         snap_dates  = [r["date"]  if r else "" for r in g_results]
+        snap_keys   = [_result_key(r) if r else "" for r in g_results]
         snap_times  = [r["time"]  if r else "" for r in g_results]
         snap_urls   = [r["url"]   if r else "" for r in g_results]
         snap_errors = [r["error"] if r else "" for r in g_results]
@@ -2128,7 +2223,7 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
                 zero_cols   = {lbl: (0 if v == -1 else v+1 if v is not None else None)
                                for lbl, v in zero_cols.items()}
 
-        return snap_dates, snap_times, snap_urls, snap_errors, pair_data, zero_cols
+        return snap_dates, snap_keys, snap_times, snap_urls, snap_errors, pair_data, zero_cols
 
     group_data = [(suffix, build_group_data(g)) for suffix, g in groups.items()]
 
@@ -2136,40 +2231,45 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
         writer = csv.writer(f)
 
         if layout == "rows":
-            # Build unified date order from all groups
-            all_date_ts: list = []
-            seen: set = set()
-            for _, (sdates, *_) in group_data:
-                for d in sdates:
-                    if d and d not in seen:
-                        seen.add(d); all_date_ts.append(d)
-            date_order = all_date_ts
+            # Build unified column order keyed by unique result key, not display
+            # date string, for the same reason as write_merged_csv: hidden date
+            # fields must not cause snapshots to share a column or lose data.
+            all_cols: list = []
+            seen_keys: set = set()
+            for _, (sdates, skeys, *_) in group_data:
+                for k, d in zip(skeys, sdates):
+                    if k and k not in seen_keys:
+                        seen_keys.add(k)
+                        all_cols.append((k, d))
+            all_cols.sort(key=lambda x: x[0])
+            key_order   = [k for k, _ in all_cols]
+            label_order = [d for _, d in all_cols]
 
-            writer.writerow(["date"] + date_order)
+            writer.writerow(["date"] + label_order)
             if show_time:
                 time_lookup: dict = {}
-                for _, (sdates, stimes, *_) in group_data:
-                    for d, t in zip(sdates, stimes):
-                        if d and d not in time_lookup:
-                            time_lookup[d] = t
-                writer.writerow(["time"] + [time_lookup.get(d, "") for d in date_order])
+                for _, (sdates, skeys, stimes, *_) in group_data:
+                    for k, t in zip(skeys, stimes):
+                        if k and k not in time_lookup:
+                            time_lookup[k] = t
+                writer.writerow(["time"] + [time_lookup.get(k, "") for k in key_order])
 
             if merged_meta == "interleaved":
                 # Per group: label, url, error, then data rows
-                for suffix, (sdates, _, surls, serrs, pdata, zero_cols) in group_data:
-                    date_idx = {d: i for i, d in enumerate(sdates)}
+                for suffix, (sdates, skeys, _, surls, serrs, pdata, zero_cols) in group_data:
+                    key_idx = {k: i for i, k in enumerate(skeys)}
                     writer.writerow([suffix])
                     writer.writerow([f"url ({suffix})"] +
-                                    [surls[date_idx[d]] if d in date_idx else "" for d in date_order])
+                                    [surls[key_idx[k]] if k in key_idx else "" for k in key_order])
                     writer.writerow([f"error ({suffix})"] +
-                                    [serrs[date_idx[d]] if d in date_idx else "" for d in date_order])
+                                    [serrs[key_idx[k]] if k in key_idx else "" for k in key_order])
                     for ordered, snap_maps in pdata:
                         for label in ordered:
                             zc  = zero_cols.get(label) if zero_fill != "no" else None
                             row = []
-                            for d in date_order:
-                                if d in date_idx:
-                                    i = date_idx[d]
+                            for k in key_order:
+                                if k in key_idx:
+                                    i = key_idx[k]
                                     row.append("0" if zc is not None and i == zc
                                                else snap_maps[i].get(label, ""))
                                 else:
@@ -2177,16 +2277,16 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
                             writer.writerow([f"{label} ({suffix})"] + row)
 
             else:  # grouped: all data first, then all urls, then all errors
-                for suffix, (sdates, _, surls, serrs, pdata, zero_cols) in group_data:
-                    date_idx = {d: i for i, d in enumerate(sdates)}
+                for suffix, (sdates, skeys, _, surls, serrs, pdata, zero_cols) in group_data:
+                    key_idx = {k: i for i, k in enumerate(skeys)}
                     writer.writerow([suffix])
                     for ordered, snap_maps in pdata:
                         for label in ordered:
                             zc  = zero_cols.get(label) if zero_fill != "no" else None
                             row = []
-                            for d in date_order:
-                                if d in date_idx:
-                                    i = date_idx[d]
+                            for k in key_order:
+                                if k in key_idx:
+                                    i = key_idx[k]
                                     row.append("0" if zc is not None and i == zc
                                                else snap_maps[i].get(label, ""))
                                 else:
@@ -2194,18 +2294,18 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
                             writer.writerow([f"{label} ({suffix})"] + row)
 
                 writer.writerow([])  # blank separator before meta rows
-                for suffix, (sdates, _, surls, serrs, *_) in group_data:
-                    date_idx = {d: i for i, d in enumerate(sdates)}
+                for suffix, (sdates, skeys, _, surls, serrs, *_) in group_data:
+                    key_idx = {k: i for i, k in enumerate(skeys)}
                     writer.writerow([f"url ({suffix})"] +
-                                    [surls[date_idx[d]] if d in date_idx else "" for d in date_order])
-                for suffix, (sdates, _, surls, serrs, *_) in group_data:
-                    date_idx = {d: i for i, d in enumerate(sdates)}
+                                    [surls[key_idx[k]] if k in key_idx else "" for k in key_order])
+                for suffix, (sdates, skeys, _, surls, serrs, *_) in group_data:
+                    key_idx = {k: i for i, k in enumerate(skeys)}
                     writer.writerow([f"error ({suffix})"] +
-                                    [serrs[date_idx[d]] if d in date_idx else "" for d in date_order])
+                                    [serrs[key_idx[k]] if k in key_idx else "" for k in key_order])
 
         else:  # columns: stack each group's block vertically
             first_block = True
-            for suffix, (sdates, stimes, surls, serrs, pdata, zero_cols) in group_data:
+            for suffix, (sdates, _, stimes, surls, serrs, pdata, zero_cols) in group_data:
                 if not first_block:
                     writer.writerow([])
                 first_block = False
@@ -2618,6 +2718,17 @@ def main():
     cfg["ref_dir"]  = ref_dir
     cfg["base_dir"] = base_dir
 
+    # Register an atexit handler so the log is saved even if the run
+    # crashes or is interrupted with Ctrl+C before reaching a normal
+    # save_log() call. Uses a mutable flag so a completed run (which
+    # already called save_log) does not write a duplicate entry.
+    _atexit_log_saved = [False]
+    def _atexit_save_log():
+        if not _atexit_log_saved[0] and _log_lines:
+            log("\n[Log]    Run ended unexpectedly -- saving partial log.")
+            save_log(cfg["output"], cfg["base_dir"]); _atexit_log_saved[0] = True
+    atexit.register(_atexit_save_log)
+
     gap_info = (_format_gap(cfg["min_gap_secs"])
                 if cfg["min_gap_secs"] > 0 else "disabled")
 
@@ -2800,7 +2911,7 @@ def main():
                 if cfg["reformat"]: reformat_csv(results, cfg, out_path)
             else:
                 dispatch(groups)
-            save_log(cfg["output"], cfg["base_dir"])
+            save_log(cfg["output"], cfg["base_dir"]); _atexit_log_saved[0] = True
 
         else:
             groups = {}
@@ -2854,7 +2965,7 @@ def main():
                 write_csv(results, cfg, out_path)
                 if cfg["reformat"]: reformat_csv(results, cfg, out_path)
 
-            save_log(cfg["output"], cfg["base_dir"])
+            save_log(cfg["output"], cfg["base_dir"]); _atexit_log_saved[0] = True
 
     else:
         # Standard un-split output
@@ -2865,7 +2976,7 @@ def main():
         write_csv(results, cfg, out_path)
         if cfg["reformat"]:
             reformat_csv(results, cfg, out_path)
-        save_log(cfg["output"], cfg["base_dir"])
+        save_log(cfg["output"], cfg["base_dir"]); _atexit_log_saved[0] = True
 
 
 

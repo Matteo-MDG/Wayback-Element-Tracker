@@ -5,12 +5,14 @@
 Fetches archived snapshots of a webpage from the Wayback Machine, extracts a
 specific HTML element's value from each one, and saves the results to a CSV file.
 
-Requirements before running (type into command prompt):  
+Requires python: https://www.python.org/downloads/
+
+Before running, type into command prompt:  
 &nbsp; &nbsp; &nbsp;`pip install -r requirements.txt`
 
 #### Usage:  
 &nbsp; &nbsp; &nbsp;Double click or run in command prompt:  
-&nbsp; &nbsp; &nbsp;`python wayback_element_tracker.pyw`
+&nbsp; &nbsp; &nbsp;`python wayback_gui.pyw`
 
 #### Running without the GUI:  
 &nbsp; &nbsp; &nbsp;Edit `settings.txt`, then run in command prompt:  
