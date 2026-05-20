@@ -446,6 +446,28 @@ When merging, the display casing of each merged group is determined by `label_ca
 
 <br>
 
+### STANDALONE TOOLS
+
+`wayback_combine.py` and `wayback_reformat.py` can be run independently without re-fetching data from the Wayback Machine.
+
+Combine existing CSV files:  
+&nbsp; &nbsp; &nbsp;`python wayback_combine.py` (prompts for files)  
+&nbsp; &nbsp; &nbsp;`python wayback_combine.py results/raw/a.csv results/raw/b.csv -o out.csv` (explicit paths)  
+&nbsp; &nbsp; &nbsp;`python wayback_combine.py raw/*.csv --override` (overwrite output)  
+
+At least 2 raw CSV files are required. Files ending in `_reformatted.csv` are automatically excluded. The layout (rows or columns) is detected from the first file; any file with mismatched headers or row labels is skipped with a warning. Duplicates are detected and silently dropped. Output defaults to `combined.csv` in the same folder as the first input file.  
+<br>
+<br>
+Reformat an existing raw CSV:  
+&nbsp; &nbsp; &nbsp;`python wayback_reformat.py` (prompts for files)  
+&nbsp; &nbsp; &nbsp;`python wayback_reformat.py results/raw/out.csv`(explicit path)    
+&nbsp; &nbsp; &nbsp;`python wayback_reformat.py results/raw/out.csv 1:2 2:3` (explicit path and pairs)
+
+Pairs are passed as `label:value` element index numbers (e.g. `1:2` means element 1 as label, element 2 as value). When pairs are passed on the command line, they override `settings.txt`. If no pairs are provided and none are configured in `settings.txt`, the script lists available elements and prompts the user.
+
+Reads all other settings from `settings.txt` as normal.
+<br>
+<br>
 ### FETCH MODE
 `headless_browser`  
 Use a headless Chromium browser to fetch every snapshot instead of a plain HTTP request. (`yes` / `no`)  
