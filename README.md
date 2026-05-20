@@ -455,7 +455,7 @@ Combine existing CSV files:
 &nbsp; &nbsp; &nbsp;`python wayback_combine.py results/raw/a.csv results/raw/b.csv -o out.csv` (explicit paths)  
 &nbsp; &nbsp; &nbsp;`python wayback_combine.py raw/*.csv --override` (overwrite output)  
 
-At least 2 raw CSV files are required. Files ending in `_reformatted.csv` are automatically excluded. The layout (rows or columns) is detected from the first file; any file with mismatched headers or row labels is skipped with a warning. Duplicates are detected and silently dropped. Output defaults to `combined.csv` in the same folder as the first input file.  
+At least 2 raw CSV files are required. Files ending in `_reformatted.csv` are automatically excluded. The layout (rows or columns) is detected from the first file. Output defaults to `combined.csv` in the same folder as the first input file.  
 <br>
 <br>
 Reformat an existing raw CSV:  
