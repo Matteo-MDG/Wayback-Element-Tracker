@@ -454,6 +454,7 @@ Combine existing CSV files:
 &nbsp; &nbsp; &nbsp;`python wayback_combine.py` (prompts for files)  
 &nbsp; &nbsp; &nbsp;`python wayback_combine.py results/raw/a.csv results/raw/b.csv -o out.csv` (explicit paths)  
 &nbsp; &nbsp; &nbsp;`python wayback_combine.py raw/*.csv --override` (overwrite output)  
+&nbsp; &nbsp; &nbsp;`python wayback_combine.py raw/*.csv --merged` (force merged style from split_output)  
 
 At least 2 raw CSV files are required. Files ending in `_reformatted.csv` are automatically excluded. The layout (rows or columns) is detected from the first file. Output defaults to `combined.csv` in the same folder as the first input file.  
 <br>
@@ -461,7 +462,7 @@ At least 2 raw CSV files are required. Files ending in `_reformatted.csv` are au
 Reformat an existing raw CSV:  
 &nbsp; &nbsp; &nbsp;`python wayback_reformat.py` (prompts for files)  
 &nbsp; &nbsp; &nbsp;`python wayback_reformat.py results/raw/out.csv`(explicit path)    
-&nbsp; &nbsp; &nbsp;`python wayback_reformat.py results/raw/out.csv 1:2 2:3` (explicit path and pairs)
+&nbsp; &nbsp; &nbsp;`python wayback_reformat.py raw/*.csv 1:2 2:3` (explicit path and pairs)
 
 Pairs are passed as `label:value` element index numbers (e.g. `1:2` means element 1 as label, element 2 as value). When pairs are passed on the command line, they override `settings.txt`. If no pairs are provided and none are configured in `settings.txt`, the script lists available elements and prompts the user.
 
