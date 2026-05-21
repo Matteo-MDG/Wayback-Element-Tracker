@@ -22,18 +22,9 @@ import re
 import sys
 from urllib.parse import urlparse, unquote
 
-# Shared utilities imported from the main tracker.
-# This import works without a circular-import error because wayback_element_tracker
-# defines these functions before it imports from this module.
-from wayback_element_tracker import (
-    log,
-    apply_padding,
-    prev_period_dt,
-    ts_to_dt,
-    format_datetime,
-    _result_key,
-    FREQ_MAP,
-)
+# Shared utilities are imported lazily (inside each function) to avoid the
+# circular-import that arises when wayback_element_tracker.py is run as
+# __main__. See wayback_combine.py for a full explanation.
 from wayback_combine import resolve_output_path
 
 def url_slug(label: str) -> str:
@@ -141,6 +132,11 @@ def reformat_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
           grouped     : data rows, then url, then error at the bottom of the block.
         url/error rows are labelled "url (suffix)" / "error (suffix)".
     """
+    # Deferred import — avoids circular dependency at module load time.
+    from wayback_element_tracker import (
+        log, apply_padding, _result_key, prev_period_dt, ts_to_dt, format_datetime,
+    )
+
     if not groups:
         return
 
@@ -379,6 +375,11 @@ def reformat_csv(results: list, cfg: dict, output_path: str) -> None:
     becomes its own row (rows layout) or column (columns layout), with snapshot
     dates/times spread across columns/rows respectively.
     """
+    # Deferred import — avoids circular dependency at module load time.
+    from wayback_element_tracker import (
+        log, apply_padding, prev_period_dt, ts_to_dt, format_datetime,
+    )
+
     if not results:
         log("[Reformat] No results to reformat.")
         return

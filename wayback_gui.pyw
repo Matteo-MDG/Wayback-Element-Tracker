@@ -1198,6 +1198,7 @@ class WaybackGUI:
             if _entry.edit_modified() and not self._loading:
                 self._unsaved = True
                 self.root.after_idle(self._check_if_clean)
+                self.root.after_idle(self._refresh_pair_dropdowns)
             _entry.edit_modified(False)
         entry.bind("<<Modified>>", _on_level_change)
 
@@ -1474,6 +1475,8 @@ class WaybackGUI:
         }
 
         self._refresh_element_remove_btns()
+        # Keep the reformat dropdowns in sync (new element appeared in the list).
+        self.root.after_idle(self._refresh_pair_dropdowns)
 
         if not (_loading or self._loading):
             self._unsaved = True
@@ -1529,7 +1532,8 @@ class WaybackGUI:
                     sep.grid_remove()
                 else:
                     sep.grid()
-
+        # Keep the reformat dropdowns in sync with the current element list.
+        self._refresh_pair_dropdowns()
     def _refresh_element_remove_btns(self):
         """Disable the Remove button when only one slot remains."""
         only_one = len(self._active_slots) <= 1
@@ -1790,19 +1794,14 @@ class WaybackGUI:
         v_qbtn.bind("<FocusOut>", v_qtt._hide, add="+")
 
         # --- Fixed button row (+ −) ---
-        # Wrapper tk.Frames let us set an explicit pixel width so they match
-        # the entry boxes exactly.  pack_propagate(False) stops the frame from
-        # shrinking to fit the button child.
+        # Plain ttk.Button(width=2) — identical to the ? tooltip buttons.
         btn_outer = ttk.Frame(parent)
         btn_outer.grid(row=row_btn, column=1, columnspan=3, sticky="w",
                         padx=(0, 4), pady=(0, 4))
 
-        add_wrap = tk.Frame(btn_outer)          # plain tk.Frame for pixel sizing
-        add_wrap.pack_propagate(False)
-        add_wrap.pack(side="left", padx=(0, 2))
-        self._pairs_add_btn = ttk.Button(add_wrap, text="+",
+        self._pairs_add_btn = ttk.Button(btn_outer, text="+", width=2,
                                           command=self._add_pair_slot)
-        self._pairs_add_btn.pack(fill="both", expand=True)
+        self._pairs_add_btn.pack(side="left", padx=(0, 2))
         _pairs_add_tt = _Tooltip(self._pairs_add_btn, _TIPS.get("pairs_add", ""))
         self._pairs_add_btn.bind("<FocusIn>",
                                  lambda e, b=self._pairs_add_btn, tt=_pairs_add_tt:
@@ -1810,12 +1809,9 @@ class WaybackGUI:
                                  add="+")
         self._pairs_add_btn.bind("<FocusOut>", _pairs_add_tt._hide, add="+")
 
-        rem_wrap = tk.Frame(btn_outer)
-        rem_wrap.pack_propagate(False)
-        rem_wrap.pack(side="left", padx=(0, 0))
-        self._pairs_rem_btn = ttk.Button(rem_wrap, text="\u2212",
+        self._pairs_rem_btn = ttk.Button(btn_outer, text="\u2212", width=2,
                                           command=self._remove_last_pair)
-        self._pairs_rem_btn.pack(fill="both", expand=True)
+        self._pairs_rem_btn.pack(side="left")
         _pairs_rem_tt = _Tooltip(self._pairs_rem_btn, _TIPS.get("pairs_remove", ""))
         self._pairs_rem_btn.bind("<FocusIn>",
                                  lambda e, b=self._pairs_rem_btn, tt=_pairs_rem_tt:
@@ -1823,20 +1819,191 @@ class WaybackGUI:
                                  add="+")
         self._pairs_rem_btn.bind("<FocusOut>", _pairs_rem_tt._hide, add="+")
 
-        # Store the wrapper frames so _sync_pair_btn_size can resize them.
-        self._pairs_add_wrap = add_wrap
-        self._pairs_rem_wrap = rem_wrap
+        # No wrapper frames; nullify so _sync_pair_btn_size is a no-op.
+        self._pairs_add_wrap = None
+        self._pairs_rem_wrap = None
 
         # Store refs for enable/disable and ? label updates
         self._pairs_lbl_widgets = [lbl_label, val_label]
         self._pairs_qbtns       = [l_qbtn, v_qbtn]
 
+    @staticmethod
+    def _extract_element_label(raw):
+        """Extract a short human label from a raw element string.
+
+        Tries, in order:
+          1. First class name of the first HTML tag.
+          2. id attribute of the first tag.
+          3. Tag name of the first tag.
+          4. Empty string if nothing is parseable.
+        """
+        import re as _re
+        raw = raw.strip()
+        if not raw:
+            return ""
+        m = _re.search(r"<(?!/)([^>]+)>", raw)
+        if not m:
+            return ""
+        tag_content = m.group(1)
+        cm = _re.search('class=(?:["\'])((?:[^"\' ])+)', tag_content)
+        if cm:
+            classes = cm.group(1).split()
+            if classes:
+                return classes[0]
+        im = _re.search('id=(?:["\'])((?:[^"\' ])+)', tag_content)
+        if im:
+            return im.group(1).strip()
+        tm = _re.match(r"(\w+)", tag_content)
+        if tm:
+            return tm.group(1)
+        return ""
+
+    def _get_element_choices(self):
+        """Return (values, labels) for the pair dropdowns.
+
+        values: list of integer strings ("1", "2", …) stored in lvar/vvar.
+                A leading "" represents the blank "no selection" option.
+        labels: parallel list of display strings shown in the combobox.
+                Format: "N. class-name [extract]" or "N. Element N [extract]".
+
+        The blank first entry lets the user clear a slot.
+        """
+        values = [""]
+        labels = [""]
+        for display_num, slot_id in enumerate(self._active_slots, 1):
+            raw     = self._element_get_value(slot_id)
+            short   = self._extract_element_label(raw)
+            extract = self._vars.get(f"extract_{slot_id}")
+            ext_str = (extract.get().strip() or "text") if extract else "text"
+            name    = short if short else f"Element {display_num}"
+            label   = f"{display_num}. {name}  ({ext_str})"
+            values.append(str(display_num))
+            labels.append(label)
+        return values, labels
+
+    def _refresh_pair_dropdowns(self):
+        """Rebuild all pair combobox option lists.
+
+        Rules enforced for every pair:
+          - A blank first option is always present (clears the slot).
+          - Any element already chosen in ANY column of ANY OTHER pair is
+            excluded from both dropdowns of this pair — each element can only
+            be used once across the whole table.
+          - The element chosen in the PARTNER column of THIS pair is also
+            excluded, so a pair can't use the same element for both label and value.
+          - The pair's own current selection is always kept in its own list so
+            the displayed value never disappears.
+
+        Also resizes all comboboxes to fit the longest current label.
+        """
+        values, labels = self._get_element_choices()
+        # values[0] == "" (blank), labels[0] == "" (blank)
+        # values[i] == str(i) for i >= 1
+
+        def _val_to_label(v):
+            if not v:
+                return ""
+            try:
+                return labels[values.index(v)]
+            except ValueError:
+                return ""
+
+        # Collect each pair's selections as a set, indexed by pair position.
+        pair_selections = []
+        for s in self._pair_entries:
+            both = set()
+            lv = s["lvar"].get()
+            vv = s["vvar"].get()
+            if lv:
+                both.add(lv)
+            if vv:
+                both.add(vv)
+            pair_selections.append(both)
+
+        for pair_idx, slot in enumerate(self._pair_entries):
+            le   = slot["le"]
+            ve   = slot["ve"]
+            lvar = slot["lvar"]
+            vvar = slot["vvar"]
+
+            cur_lv = lvar.get()
+            cur_vv = vvar.get()
+
+            # All values claimed by any OTHER pair (both columns)
+            other_claimed = set()
+            for i, sel in enumerate(pair_selections):
+                if i != pair_idx:
+                    other_claimed |= sel
+
+            # LABEL dropdown: exclude partner + other pairs; keep own selection
+            forbidden_l = other_claimed | ({cur_vv} if cur_vv else set())
+            avail_l = [labels[i] for i, v in enumerate(values)
+                       if not v or v not in forbidden_l or v == cur_lv]
+
+            # VALUE dropdown: exclude partner + other pairs; keep own selection
+            forbidden_v = other_claimed | ({cur_lv} if cur_lv else set())
+            avail_v = [labels[i] for i, v in enumerate(values)
+                       if not v or v not in forbidden_v or v == cur_vv]
+
+            le.configure(values=avail_l)
+            ve.configure(values=avail_v)
+
+            # Restore displayed text (in case list shrank and old value gone)
+            want_l = _val_to_label(cur_lv)
+            want_v = _val_to_label(cur_vv)
+            _prev = self._loading
+            self._loading = True
+            if le.get() != want_l:
+                le.set(want_l)
+            if ve.get() != want_v:
+                ve.set(want_v)
+            self._loading = _prev
+
+        self._update_add_btn()
+        self._sync_pair_combo_widths()
+
+    def _label_to_val_fresh(self, display_text):
+        """Convert a combobox display label to its integer-string value.
+
+        Always calls _get_element_choices() fresh so it is never stale.
+        Returns "" for the blank option or unrecognised text.
+        """
+        if not display_text:
+            return ""
+        values, labels = self._get_element_choices()
+        try:
+            return values[labels.index(display_text)]
+        except ValueError:
+            return ""
+
+    def _val_to_label_fresh(self, v):
+        """Convert an integer-string value to its current display label.
+
+        Always calls _get_element_choices() fresh so it is never stale.
+        """
+        if not v:
+            return ""
+        values, labels = self._get_element_choices()
+        try:
+            return labels[values.index(v)]
+        except ValueError:
+            return ""
+
     def _add_pair_slot(self, lval="", vval=""):
-        """Append a new entry to both the L and V rows."""
+        """Append a new combobox pair to both the Label and Value rows.
+
+        *lval* / *vval* are integer strings ("1", "2" …) or "" for blank.
+        The comboboxes display human labels ("N. class-name [extract]").
+
+        Conversions between display labels and integer-string values are
+        always done with fresh calls to _get_element_choices() so they
+        never go stale when element names or extract types change.
+        """
+        # Internal vars hold integer strings (or "") — written to settings.
         lvar = tk.StringVar(value=str(lval))
         vvar = tk.StringVar(value=str(vval))
 
-        # Temporarily unpack the ? buttons so the new entry frames pack before them.
+        # Temporarily unpack the ? buttons so new frames pack before them.
         l_qbtn, v_qbtn = (self._pairs_qbtns or [None, None])
         if l_qbtn:
             l_qbtn.pack_forget()
@@ -1844,28 +2011,38 @@ class WaybackGUI:
             v_qbtn.pack_forget()
 
         lframe = ttk.Frame(self._pairs_l_container)
-        lframe.pack(side="left", padx=(0, 2))
-        le = ttk.Entry(lframe, textvariable=lvar, width=3)
+        lframe.pack(side="left", padx=(0, 4))
+        le = ttk.Combobox(lframe, state="readonly", width=20)
+        le.set(self._val_to_label_fresh(str(lval)))
         le.pack()
-        le.bind("<FocusIn>",
-                lambda e: le.after(0, le.selection_clear), add="+")
 
         vframe = ttk.Frame(self._pairs_v_container)
-        vframe.pack(side="left", padx=(0, 2))
-        ve = ttk.Entry(vframe, textvariable=vvar, width=3)
+        vframe.pack(side="left", padx=(0, 4))
+        ve = ttk.Combobox(vframe, state="readonly", width=20)
+        ve.set(self._val_to_label_fresh(str(vval)))
         ve.pack()
-        ve.bind("<FocusIn>",
-                lambda e: ve.after(0, ve.selection_clear), add="+")
 
-        # Repack the ? buttons so they trail the last entry.
-        # lift() moves each button to the top of its container's stacking order,
-        # which is what tk_focusNext uses — so the entries are always traversed
-        # before the ? button regardless of how many pairs exist.
+        # Use <<ComboboxSelected>> (fires only on user picks, not programmatic
+        # set()) so we never get spurious updates during _refresh_pair_dropdowns.
+        def _on_le_select(event=None):
+            lvar.set(self._label_to_val_fresh(le.get()))
+            self._refresh_pair_dropdowns()
+            self._sync_pairs_to_vars()
+
+        def _on_ve_select(event=None):
+            vvar.set(self._label_to_val_fresh(ve.get()))
+            self._refresh_pair_dropdowns()
+            self._sync_pairs_to_vars()
+
+        le.bind("<<ComboboxSelected>>", _on_le_select)
+        ve.bind("<<ComboboxSelected>>", _on_ve_select)
+
+        # Repack ? buttons so they trail the last entry.
         if l_qbtn:
-            l_qbtn.pack(side="left", padx=(4, 0))
+            l_qbtn.pack(side="left", padx=(0, 0))
             l_qbtn.lift()
         if v_qbtn:
-            v_qbtn.pack(side="left", padx=(4, 0))
+            v_qbtn.pack(side="left", padx=(0, 0))
             v_qbtn.lift()
 
         slot = {"lvar": lvar, "vvar": vvar, "lframe": lframe, "vframe": vframe,
@@ -1873,38 +2050,32 @@ class WaybackGUI:
         self._pair_entries.append(slot)
         self._bind_pair_entry_nav(slot)
 
-        lvar.trace_add("write", lambda *_: self._sync_pairs_to_vars())
-        vvar.trace_add("write", lambda *_: self._sync_pairs_to_vars())
-
         self._update_rem_btn()
         self._update_add_btn()
-        # Pixel-sync the +/- buttons to entry size on every add (first call
-        # may fire before layout settles, subsequent calls are instant no-ops).
         le.after_idle(self._sync_pair_btn_size)
+        le.after_idle(self._sync_pair_combo_widths)
 
-        # Auto-scroll to reveal the new entry if it landed off-screen.
+        # Refresh all dropdowns so the new pair gets filtered choices and
+        # existing pairs drop any elements it would claim (skip during loading
+        # since _rebuild_pairs_from_vars calls _refresh_pair_dropdowns itself).
         if not self._loading:
+            self._refresh_pair_dropdowns()
+            self._sync_pairs_to_vars()
             container = self._pairs_l_container
             def _scroll_to_new():
                 parent = container.master
                 if hasattr(parent, "_scroll_to_show_right"):
                     parent._scroll_to_show_right()
             le.after_idle(_scroll_to_new)
-            self._sync_pairs_to_vars()
 
         return slot
 
     def _bind_pair_entry_nav(self, slot):
-        """Arrow-key navigation for a pair (le / ve) entry slot.
+        """Arrow-key navigation for a pair (le / ve) combobox slot.
 
-        Left / Right: move the cursor normally within the entry; when the
-        cursor is already at the edge (or the entry is empty), jump focus to
-        the neighbouring pair entry in the same row.
-
-        Up on le  : move cursor to the start (mirrors _bind_arrow_nav Up).
-        Down on le : jump focus to the ve of the same pair.
-        Up on ve   : jump focus to the le of the same pair.
-        Down on ve : move cursor to the end (mirrors _bind_arrow_nav Down).
+        Left / Right: jump focus to the neighbouring pair in the same row.
+        Up / Down are left unbound so the comboboxes behave like standard
+        dropdowns (arrow keys scroll through options in the open list).
         """
         le = slot["le"]
         ve = slot["ve"]
@@ -1915,113 +2086,78 @@ class WaybackGUI:
             except ValueError:
                 return -1
 
-        # ---- helpers -------------------------------------------------------
-        def _move_cursor_left(w):
-            pos = w.index("insert")
-            if pos == 0:
-                return False      # already at left edge
-            w.icursor(pos - 1)
-            if w.index("@0") > pos - 1:
-                w.xview_scroll(-1, "units")
-            return True
-
-        def _move_cursor_right(w):
-            pos = w.index("insert")
-            end = w.index("end")
-            if pos >= end:
-                return False      # already at right edge
-            w.icursor(pos + 1)
-            width = w.winfo_width()
-            if width > 1 and w.index(f"@{width - 1}") < pos + 1:
-                w.xview_scroll(1, "units")
-            return True
-
-        # ---- le -------------------------------------------------------
         def _le_left(e):
-            if not _move_cursor_left(le):
-                i = _idx()
-                if i > 0:
-                    t = self._pair_entries[i - 1]["le"]
-                    t.focus_set(); t.icursor("end")
+            i = _idx()
+            if i > 0:
+                self._pair_entries[i - 1]["le"].focus_set()
             return "break"
 
         def _le_right(e):
-            if not _move_cursor_right(le):
-                i = _idx()
-                if 0 <= i < len(self._pair_entries) - 1:
-                    t = self._pair_entries[i + 1]["le"]
-                    t.focus_set(); t.icursor(0); t.xview_moveto(0)
+            i = _idx()
+            if 0 <= i < len(self._pair_entries) - 1:
+                self._pair_entries[i + 1]["le"].focus_set()
             return "break"
 
-        def _le_up(e):
-            le.icursor(0); le.xview_moveto(0)
-            return "break"
-
-        def _le_down(e):
-            ve.focus_set()
-            return "break"
-
-        # ---- ve -------------------------------------------------------
         def _ve_left(e):
-            if not _move_cursor_left(ve):
-                i = _idx()
-                if i > 0:
-                    t = self._pair_entries[i - 1]["ve"]
-                    t.focus_set(); t.icursor("end")
+            i = _idx()
+            if i > 0:
+                self._pair_entries[i - 1]["ve"].focus_set()
             return "break"
 
         def _ve_right(e):
-            if not _move_cursor_right(ve):
-                i = _idx()
-                if 0 <= i < len(self._pair_entries) - 1:
-                    t = self._pair_entries[i + 1]["ve"]
-                    t.focus_set(); t.icursor(0); t.xview_moveto(0)
-            return "break"
-
-        def _ve_up(e):
-            le.focus_set()
-            return "break"
-
-        def _ve_down(e):
-            ve.icursor("end"); ve.xview_moveto(1)
+            i = _idx()
+            if 0 <= i < len(self._pair_entries) - 1:
+                self._pair_entries[i + 1]["ve"].focus_set()
             return "break"
 
         le.bind("<Left>",  _le_left)
         le.bind("<Right>", _le_right)
-        le.bind("<Up>",    _le_up)
-        le.bind("<Down>",  _le_down)
         ve.bind("<Left>",  _ve_left)
         ve.bind("<Right>", _ve_right)
-        ve.bind("<Up>",    _ve_up)
-        ve.bind("<Down>",  _ve_down)
 
     def _sync_pair_btn_size(self):
-        """Resize the +/- wrapper frames to match the pixel width of an entry box.
+        """No-op: +/− buttons are plain ttk.Button(width=2), sized naturally."""
+        pass
 
-        Uses the entry's pixel width for the wrapper width, but the button's own
-        natural height — so the text stays vertically centred exactly as it was
-        before the pixel-width wrapper was introduced.
+    def _sync_pair_combo_widths(self):
+        """Resize all pair comboboxes to snugly fit the longest label.
+
+        ttk.Combobox width= is in character units (1 unit = "0" glyph px).
+        We measure the longest label in pixels and divide by the "0" glyph
+        width to get the entry character width.  The dropdown popup will be
+        slightly wider than the text (by the arrow button width, ~20 px) but
+        that gap is unavoidable: narrowing the entry to tighten the popup
+        would clip the selected text shown in the entry field.
         """
-        if not self._pair_entries:
+        _, labels = self._get_element_choices()
+        real_labels = [lbl for lbl in labels if lbl]
+        if not real_labels or not self._pair_entries:
             return
-        if self._pairs_add_wrap is None or self._pairs_rem_wrap is None:
-            return
-        le = self._pair_entries[0]["le"]
-        lf = self._pair_entries[0]["lframe"]
-        w = lf.winfo_reqwidth()    # entry width including any frame padding
-        if w < 2:
-            # Layout hasn't settled yet; retry after idle
-            le.after_idle(self._sync_pair_btn_size)
-            return
-        # Use the button's own requested height so we never stretch it and
-        # push the label text down.
-        h_add = self._pairs_add_btn.winfo_reqheight()
-        h_rem = self._pairs_rem_btn.winfo_reqheight()
-        if h_add < 2 or h_rem < 2:
-            le.after_idle(self._sync_pair_btn_size)
-            return
-        self._pairs_add_wrap.configure(width=w, height=h_add)
-        self._pairs_rem_wrap.configure(width=w, height=h_rem)
+        try:
+            cb = self._pair_entries[0]["le"]
+            # Resolve the font the combobox is actually using.
+            font_name = cb.cget("font")
+            if font_name:
+                try:
+                    font = _tkfont.nametofont(font_name)
+                except Exception:
+                    font = _tkfont.Font(font=font_name)
+            else:
+                font = _tkfont.nametofont("TkDefaultFont")
+            # Measure every label; keep the longest.
+            px_widths  = [font.measure(lbl) for lbl in real_labels]
+            longest_px = max(px_widths)
+            zero_px    = font.measure("0") or 1
+            # Size the entry to fit the longest label text exactly.
+            # The dropdown popup will be entry_px + button_px wide, giving a
+            # small natural gap (~button width) which is unavoidable — making
+            # the entry narrower to tighten the popup clips the selected text.
+            width_ch = max(8, int(longest_px / zero_px) + 1)
+        except Exception:
+            width_ch = 18
+        for slot in self._pair_entries:
+            slot["le"].configure(width=width_ch)
+            slot["ve"].configure(width=width_ch)
 
     def _remove_last_pair(self):
         """Remove the rightmost pair entry from both rows."""
@@ -2040,14 +2176,14 @@ class WaybackGUI:
         slot["vframe"].destroy()
 
         if l_qbtn:
-            l_qbtn.pack(side="left", padx=(4, 0))
+            l_qbtn.pack(side="left", padx=(0, 0))
             l_qbtn.lift()
         if v_qbtn:
-            v_qbtn.pack(side="left", padx=(4, 0))
+            v_qbtn.pack(side="left", padx=(0, 0))
             v_qbtn.lift()
 
         self._update_rem_btn()
-        self._update_add_btn()
+        self._refresh_pair_dropdowns()
         self._sync_pairs_to_vars()
 
     def _update_rem_btn(self):
@@ -2059,18 +2195,27 @@ class WaybackGUI:
             )
 
     def _update_add_btn(self):
-        """Enable the + button only when the last pair has both label and value filled."""
+        """Enable + only when every existing pair is fully filled and there are
+        still unused elements left to assign."""
         if not self._pairs_add_btn:
             return
-        # If globally disabled (reformat = no), leave it alone.
         if getattr(self, "_pairs_force_disabled", False):
             return
         if not self._pair_entries:
             self._pairs_add_btn.configure(state="normal")
             return
-        last = self._pair_entries[-1]
-        both_filled = bool(last["lvar"].get().strip()) and bool(last["vvar"].get().strip())
-        self._pairs_add_btn.configure(state="normal" if both_filled else "disabled")
+        # ALL pairs must have both columns filled — not just the last one.
+        all_filled = all(
+            bool(s["lvar"].get().strip()) and bool(s["vvar"].get().strip())
+            for s in self._pair_entries
+        )
+        # n_choices includes the blank leading entry; subtract 1 for real elements.
+        vals, _lbls = self._get_element_choices()
+        n_real  = len(vals) - 1
+        n_pairs = len(self._pair_entries)
+        self._pairs_add_btn.configure(
+            state="normal" if (all_filled and n_pairs < n_real) else "disabled"
+        )
 
     def _sync_pairs_to_vars(self):
         """Write current pair entries back to label_elements / value_elements vars."""
@@ -2103,15 +2248,18 @@ class WaybackGUI:
             lv = lparts[i] if i < len(lparts) else ""
             vv = vparts[i] if i < len(vparts) else ""
             self._add_pair_slot(lv, vv)
+        # Refresh dropdown lists and grayout now that all pairs are in place.
+        self._refresh_pair_dropdowns()
 
     def _set_pairs_state(self, disabled):
-        """Enable or disable all pair entries and the +/− buttons."""
-        state = "disabled" if disabled else "normal"
-        fg    = "gray"     if disabled else ""
+        """Enable or disable all pair comboboxes and the +/− buttons."""
+        # Comboboxes use "readonly" when enabled; "disabled" when locked.
+        cb_state = "disabled" if disabled else "readonly"
+        fg       = "gray"     if disabled else ""
         for lbl in self._pairs_lbl_widgets:
             lbl.configure(foreground=fg)
         for btn in self._pairs_qbtns:
-            btn.configure(state=state)
+            btn.configure(state="disabled" if disabled else "normal")
         if self._pairs_add_btn:
             self._pairs_force_disabled = disabled
             if disabled:
@@ -2124,8 +2272,8 @@ class WaybackGUI:
             else:
                 self._update_rem_btn()
         for slot in self._pair_entries:
-            slot["le"].configure(state=state)
-            slot["ve"].configure(state=state)
+            slot["le"].configure(state=cb_state)
+            slot["ve"].configure(state=cb_state)
 
     def _build_reformat_tab(self):
         f = self._scrollable_tab("Reformat")
@@ -3187,13 +3335,13 @@ class WaybackGUI:
         # Safety-net patterns: catch any raw sys.exit("msg") calls that bypass
         # _error_exit/_warn_exit and therefore never emit a [_ERROR_]/[_WARN_]
         # signal. All intentional exits should use those helpers instead.
+        # NOTE: preflight-aborted cases are intentionally excluded here because
+        # they always go through _warn_exit, which logs the message AND emits
+        # [_WARN_]. Including them would match the logged text and fire a second
+        # (error) dialog on top of the intended warning dialog.
         _FATAL_PATTERNS = [
             _fatal_pattern("cdx_failed"),
             _fatal_pattern("no_snapshots"),
-            _fatal_pattern("preflight_aborted_urls"),
-            _fatal_pattern("preflight_aborted_count"),
-            _fatal_pattern("preflight_aborted_timeout_urls"),
-            _fatal_pattern("preflight_aborted_timeout_count"),
         ]
 
         def _is_fatal_exit(line: str) -> bool:

@@ -20,17 +20,11 @@ import os
 import re
 import sys
 
-# Shared utilities imported from the main tracker.
-# This import works without a circular-import error because wayback_element_tracker
-# defines these functions before it imports from this module.
-from wayback_element_tracker import (
-    log,
-    apply_padding,
-    _result_key,
-    ts_to_dt,
-    anchor_dt_for,
-    FREQ_MAP,
-)
+# Shared utilities are imported lazily (inside each function) to avoid the
+# circular-import that arises when wayback_element_tracker.py is run as
+# __main__: Python registers it as __main__, so "from wayback_element_tracker"
+# triggers a second load of that file, which hits the "from wayback_combine"
+# line again before this module has finished initialising.
 
 # -- Output Path Resolution ----------------------------------------------------
 def resolve_output_path(path: str, override: bool) -> str:
@@ -86,6 +80,9 @@ def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
         A group-label row (suffix in col 0) appears before each block's
         column-header row, so every block is self-identifying.
     """
+    # Deferred import — avoids circular dependency at module load time.
+    from wayback_element_tracker import log, apply_padding, _result_key
+
     if not groups:
         log("[Merged]  No groups to write.")
         return
@@ -234,6 +231,8 @@ def write_merged_csv(groups: dict, cfg: dict, output_path: str) -> None:
 
 
 def write_csv(results: list, cfg: dict, output_path: str) -> None:
+    # Deferred import — avoids circular dependency at module load time.
+    from wayback_element_tracker import log, apply_padding
     if not results:
         log("[CSV]    No results to write.")
         return
@@ -355,6 +354,7 @@ def _ts_from_url(url: str) -> str:
 
 def _period_key(ts: str, frequency: str) -> str:
     """Return the period bucket key for a timestamp string, or '' if ts is empty."""
+    from wayback_element_tracker import FREQ_MAP, ts_to_dt
     if not ts or frequency == "all":
         return ts
     fmt = FREQ_MAP.get(frequency)
@@ -369,6 +369,7 @@ def _period_key(ts: str, frequency: str) -> str:
 def _anchor_distance(ts: str, frequency: str, sample_from: str) -> float:
     """Return seconds between a snapshot's timestamp and its period anchor.
     Lower is better (closer to the desired anchor point)."""
+    from wayback_element_tracker import ts_to_dt, anchor_dt_for
     try:
         dt     = ts_to_dt(ts)
         anchor = anchor_dt_for(dt, frequency, sample_from)

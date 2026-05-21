@@ -18,7 +18,7 @@ from wayback_dialogs import _DIALOGS, _ERRORS
 _playwright_available = None  # None = not yet checked
 
 # -- Constants ----------------------------------------------------------------
-VERSION = "v2.6.1"
+VERSION = "v2.6.2"
 GITHUB_REPO = "Matteo-MDG/Wayback-Element-Tracker"
 
 CDX_API = "https://web.archive.org/cdx/search/cdx"
@@ -1068,15 +1068,18 @@ def _cdx_preflight(cfg: dict):
         return max(0, len(rows) - 1) if rows else 0
 
     def _check_count():
+        # pageSize=1 makes showNumPages return the exact record count
+        # (one page per record) instead of ceiling(count / 100_000),
+        # which would otherwise multiply even a small result by 100,000.
         params = {
             **base_params,
             "collapse":     "digest",
             "showNumPages": "true",
+            "pageSize":     "1",
         }
         resp = requests.get(CDX_API, params=params, timeout=PREFLIGHT_TIMEOUT)
         resp.raise_for_status()
-        CDX_PAGE_SIZE = 100_000
-        return int(resp.text.strip() or 0) * CDX_PAGE_SIZE
+        return int(resp.text.strip() or 0)
 
     # Run checks in parallel. URL check is only meaningful for wildcard queries.
     with ThreadPoolExecutor(max_workers=2) as ex:
