@@ -193,16 +193,14 @@ _TIPS = {
         "  elem | value | value | ..."
     ),
     "label_elements": (
-        "The index of the element(s) whose output become the LABELS in the reformatted file.\n"
-        "e.g. 2 will treat element_2 as the label.\n\n"
+        "The element(s) whose output become the LABELS in the reformatted file.\n\n"
         "Each pair links a label element index (top row) to its corresponding value element\n"
         "index (bottom row).\n"
         "e.g. for label_elements = 1 2 and value_elements = 3 4, elements 1 and 3 are paired\n"
         "and elements 2 and 4 are paired."
     ),
     "value_elements": (
-        "The index of the element(s) whose output become the VALUES in the reformatted file.\n"
-        "e.g. 3 will treat element_3 as the value to track.\n\n"
+        "The element(s) whose output become the VALUES in the reformatted file.\n\n"
         "Each pair links a label element index (top row) to its corresponding value element\n"
         "index (bottom row).\n"
         "e.g. for label_elements = 1 2 and value_elements = 3 4, elements 1 and 3 are paired\n"

@@ -376,7 +376,7 @@ e.g. `3` will treat the `element_3` element as the value to track
 For both fields, multiple index pairs are entered together: `label_elements` index 1 is paired with `value_elements` index 1, index 2 with index 2, and so on,  
 e.g. for label elements `1` `2` and value elements `3` `4`, elements `1` and `3` will be paired and elements `2` and `4` will be paired.
 
-In the GUI, use the "+" button to add a new pair slot and the "−" button to remove the last one. Each slot is its own entry box
+In the GUI, use the "+" button to add a new pair slot and the "−" button to remove the last one. Each slot is a dropdown of all the available elements to choose from
 
 When running without the GUI, enter multiple indexes in `settings.txt` separated by spaces, e.g. `label_elements = 1 2`.
 <br>

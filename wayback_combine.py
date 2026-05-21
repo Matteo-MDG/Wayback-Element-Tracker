@@ -13,6 +13,12 @@ Standalone usage: merge existing raw CSV files into one without re-fetching.
     python wayback_combine.py                          # prompts for files
     python wayback_combine.py a.csv b.csv -o out.csv  # explicit paths
     python wayback_combine.py raw/*.csv --override     # overwrite output
+    python wayback_combine.py a.csv b.csv --merged     # force merged-style output
+
+When split_output = merged in settings.txt, each input file is treated as a
+labeled group and written in merged format (shared date header, per-group
+label/url/error/element blocks).  --merged forces this mode regardless of the
+split_output setting.
 """
 
 import csv
@@ -545,8 +551,162 @@ def _combine_rows(paths: list, output_path: str, override: bool,
     print(f"\n[Done]   {len(resolved)} snapshots  →  {os.path.abspath(out)}")
 
 
+def _combine_merged_output(paths: list, output_path: str, override: bool, layout: str):
+    """Combine input CSV files into a merged-style output where each file
+    becomes a labeled group, mirroring the write_merged_csv output format.
+
+    The group label / suffix for each file is derived from its filename stem.
+
+    Rows layout:
+        A shared date header is built from the union of all date columns across
+        all files (aligned by Wayback timestamp extracted from each url cell).
+        Each group then contributes a label row followed by its url, error, and
+        element rows — all values aligned to the unified date columns.  Cells
+        with no matching snapshot in that group are left blank.
+
+    Columns layout:
+        Groups are stacked vertically.  A label row precedes each block and a
+        blank row separates consecutive blocks.  The url / error column headers
+        are suffixed so every block is self-identifying.
+    """
+    def _suffix(p):
+        return os.path.splitext(os.path.basename(p))[0]
+
+    if layout == "columns":
+        out = resolve_output_path(output_path, override)
+        os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+        total_rows = 0
+        with open(out, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            first = True
+            for path in paths:
+                with open(path, newline="", encoding="utf-8-sig") as src:
+                    file_rows = list(csv.reader(src))
+                if not file_rows:
+                    continue
+                suffix = _suffix(path)
+                if not first:
+                    writer.writerow([])
+                first = False
+                writer.writerow([suffix])
+                # Relabel url / error column headers with the group suffix.
+                header = file_rows[0]
+                new_header = []
+                for h in header:
+                    hl = h.strip().lower()
+                    if hl == "url":
+                        new_header.append(f"url ({suffix})")
+                    elif hl == "error":
+                        new_header.append(f"error ({suffix})")
+                    else:
+                        new_header.append(h)
+                writer.writerow(new_header)
+                for row in file_rows[1:]:
+                    writer.writerow(row)
+                snap_count = len(file_rows) - 1
+                total_rows += snap_count
+                print(f"[Read]   {path}  →  {snap_count} snapshot(s)")
+        print(f"\n[Done]   {total_rows} total snapshot(s)  →  {os.path.abspath(out)}")
+        return
+
+    # -- Rows layout -----------------------------------------------------------
+    # Each file: row 0 = ["date", d1, d2, ...]; remaining rows = [label, v1, v2, ...]
+    # We build a unified timestamp→date mapping, then align each group to it.
+
+    groups = []          # list of (suffix, ts_order, ts_map, file_rows)
+    all_ts_dates = {}    # ts_key -> display date string (unified, insertion-ordered)
+
+    for path in paths:
+        with open(path, newline="", encoding="utf-8-sig") as f:
+            file_rows = list(csv.reader(f))
+        if not file_rows:
+            continue
+
+        suffix   = _suffix(path)
+        date_row = file_rows[0]
+        date_vals = date_row[1:]   # data columns only (skip "date" label)
+
+        # Locate the url row to extract per-column Wayback timestamps.
+        url_vals = []
+        for row in file_rows[1:]:
+            if row and row[0].strip().lower() == "url":
+                url_vals = row[1:]
+                break
+
+        # Build ts_key → column-index mapping for this file.
+        ts_order = []   # ts keys in file-column order
+        ts_map   = {}   # ts_key -> column index (0-based within data cols)
+        for i, d in enumerate(date_vals):
+            url_val = url_vals[i] if i < len(url_vals) else ""
+            ts      = _ts_from_url(url_val)
+            # Fall back to a file-unique placeholder when no timestamp is found
+            # (e.g. padding rows).  These sort after real timestamps.
+            ts_key  = ts if ts else f"\xff{path}\xff{i}"
+            ts_order.append(ts_key)
+            ts_map[ts_key] = i
+            if ts_key not in all_ts_dates:
+                all_ts_dates[ts_key] = d
+
+        groups.append((suffix, ts_order, ts_map, file_rows))
+        print(f"[Read]   {path}  →  {len(date_vals)} snapshot(s)")
+
+    if not groups:
+        print("[Error]  No data collected — nothing to write.")
+        return
+
+    # Sort unified columns: real timestamps (14-digit strings) first, then
+    # placeholder keys (prefixed with \xff so they sort last naturally).
+    sorted_ts     = sorted(all_ts_dates.keys())
+    unified_dates = [all_ts_dates[ts] for ts in sorted_ts]
+
+    out = resolve_output_path(output_path, override)
+    os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)
+
+    with open(out, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+
+        # Shared date header across all groups.
+        writer.writerow(["date"] + unified_dates)
+
+        for suffix, _ts_order, ts_map, file_rows in groups:
+            writer.writerow([suffix])   # group label row
+
+            # Skip row 0 (date row — now represented by the shared header).
+            for row in file_rows[1:]:
+                if not row:
+                    continue
+                label     = row[0].strip()
+                label_low = label.lower()
+
+                # Suffix url / error rows so every group block is self-identifying.
+                # Leave "time" unmodified (it was a shared dimension, not per-group).
+                # Everything else (element rows) also gets the suffix.
+                if label_low == "url":
+                    row_label = f"url ({suffix})"
+                elif label_low == "error":
+                    row_label = f"error ({suffix})"
+                elif label_low == "time":
+                    row_label = "time"
+                else:
+                    row_label = f"{label} ({suffix})"
+
+                # Align values to the unified column order; blank where absent.
+                vals    = row[1:]
+                aligned = []
+                for ts in sorted_ts:
+                    col_idx = ts_map.get(ts)
+                    aligned.append(
+                        vals[col_idx] if col_idx is not None and col_idx < len(vals)
+                        else ""
+                    )
+                writer.writerow([row_label] + aligned)
+
+    total_snaps = sum(len(ts_map) for _, _, ts_map, _ in groups)
+    print(f"\n[Done]   {total_snaps} total snapshot(s)  →  {os.path.abspath(out)}")
+
+
 def _parse_args(argv: list):
-    paths, output, override = [], None, False
+    paths, output, override, merged = [], None, False, False
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -554,17 +714,19 @@ def _parse_args(argv: list):
             output = argv[i + 1]; i += 2
         elif arg == "--override":
             override = True; i += 1
+        elif arg == "--merged":
+            merged = True; i += 1
         elif not arg.startswith("-"):
             paths.append(arg); i += 1
         else:
             print(f"[Warning] Unknown argument: {arg}"); i += 1
-    return paths, output, override
+    return paths, output, override, merged
 
 
 if __name__ == "__main__":
     from wayback_element_tracker import load_settings
 
-    paths, output, override = _parse_args(sys.argv[1:])
+    paths, output, override, force_merged = _parse_args(sys.argv[1:])
 
     if not paths:
         print("Enter path(s) to CSV file(s) to combine (blank line to finish):\n")
@@ -577,7 +739,7 @@ if __name__ == "__main__":
     if len(paths) < 2:
         sys.exit(
             "At least 2 CSV files are required.\n"
-            "Usage: python wayback_combine.py <file1.csv> <file2.csv> [...] [-o output.csv]"
+            "Usage: python wayback_combine.py <file1.csv> <file2.csv> [...] [-o output.csv] [--merged]"
         )
 
     valid = [os.path.normpath(p) for p in paths if os.path.isfile(os.path.normpath(p))]
@@ -591,8 +753,13 @@ if __name__ == "__main__":
     cfg         = load_settings()
     frequency   = cfg.get("frequency", "all")
     sample_from = cfg.get("sample_from", "start")
+    # Merged mode: each input file becomes a labeled group, mirroring the
+    # split_output = merged write style.  Enabled by --merged or by the setting.
+    # split_output = files has no equivalent for standalone combine, so only
+    # "merged" triggers merged-style output; anything else is treated as flat.
+    use_merged  = force_merged or cfg.get("split_output", "no") == "merged"
 
-    all_layouts = {p: _detect_layout(p) for p in valid}
+    all_layouts    = {p: _detect_layout(p) for p in valid}
     unique_layouts = set(all_layouts.values())
 
     if len(unique_layouts) > 1:
@@ -603,12 +770,16 @@ if __name__ == "__main__":
     if not output:
         output = os.path.join(os.path.dirname(os.path.abspath(valid[0])), "combined.csv")
     print(f"\nDetected layout : {layout}")
-    print(f"Frequency       : {frequency}")
-    if frequency != "all":
-        print(f"Sample from     : {sample_from}")
+    print(f"Output mode     : {'merged' if use_merged else 'flat'}")
+    if not use_merged:
+        print(f"Frequency       : {frequency}")
+        if frequency != "all":
+            print(f"Sample from     : {sample_from}")
     print(f"Combining {len(valid)} file(s)...\n")
 
-    if layout == "columns":
+    if use_merged:
+        _combine_merged_output(valid, output, override, layout)
+    elif layout == "columns":
         _combine_columns(valid, output, override, frequency, sample_from)
     else:
         _combine_rows(valid, output, override, frequency, sample_from)
